@@ -151,6 +151,81 @@ describe('autoPopulateRoom', () => {
     }
   });
 
+  it('maximize: valid, deterministic per seed, and never worse than greedy', () => {
+    // mix of awkward shapes so first-fit leaves holes
+    const square = makeItem({ name: 'square', comfort: 8, shape: [[2, 2], [2, 2]] });
+    const lpiece = makeItem({ name: 'lpiece', comfort: 7, shape: [[2, 1], [2, 1], [2, 2]] });
+    const bar = makeItem({ name: 'bar', comfort: 5, shape: [[2, 2, 2]] });
+    const dot = makeItem({ name: 'dot', comfort: 1, shape: [[2]] });
+    const pool = {
+      allFurniture: [square, lpiece, bar, dot],
+      ownership: { square: 10, lpiece: 10, bar: 10, dot: 30 },
+    };
+
+    const greedy = autoPopulateRoom(makeOpts({ ...pool }));
+    const maxA = autoPopulateRoom(makeOpts({ ...pool, algorithm: 'maximize', seed: 42, iterations: 30 }));
+    const maxB = autoPopulateRoom(makeOpts({ ...pool, algorithm: 'maximize', seed: 42, iterations: 30 }));
+
+    const score = (r: PlacedFurniture[]) => r.reduce((s, p) => s + presetScore(p.item, 'breeding'), 0);
+
+    // never worse than greedy baseline
+    expect(score(maxA)).toBeGreaterThanOrEqual(score(greedy));
+
+    // deterministic for fixed seed
+    expect(maxB.map(p => `${p.item.id}@${p.row},${p.col}`).sort())
+      .toEqual(maxA.map(p => `${p.item.id}@${p.row},${p.col}`).sort());
+
+    // all placements valid: in bounds, no overlap, counts respected
+    const cfg = getRoomConfig(0);
+    const seen = new Set<string>();
+    const used: Record<string, number> = {};
+    for (const p of maxA) {
+      used[p.item.id] = (used[p.item.id] || 0) + 1;
+      for (const [r, c] of solidCells(p)) {
+        expect(r).toBeGreaterThanOrEqual(0);
+        expect(r).toBeLessThan(cfg.rows);
+        expect(c).toBeGreaterThanOrEqual(0);
+        expect(c).toBeLessThan(cfg.cols);
+        expect(seen.has(`${r},${c}`)).toBe(false);
+        seen.add(`${r},${c}`);
+      }
+    }
+    for (const [id, n] of Object.entries(used)) {
+      expect(n).toBeLessThanOrEqual(pool.ownership[id as keyof typeof pool.ownership]);
+    }
+  });
+
+  it('maximize: anchored pieces remain supported after ruin-and-recreate', () => {
+    const shelf = makeItem({ name: 'shelf', comfort: 2, shape: [[3]] });
+    const hanging = makeItem({ name: 'hanging', comfort: 6, shape: [[4], [2]] });
+    const result = autoPopulateRoom(makeOpts({
+      roomIndex: ATTIC_INDEX, // no ceiling anchors: hangers need placed shelves
+      allFurniture: [shelf, hanging],
+      ownership: { shelf: 6, hanging: 6 },
+      algorithm: 'maximize',
+      seed: 7,
+      iterations: 20,
+    }));
+    // every hanging anchor cell must coincide with a shelf anchor-point cell
+    const anchorPointCells = new Set<string>();
+    for (const p of result) {
+      for (let r = 0; r < p.item.shape.length; r++) {
+        for (let c = 0; c < p.item.shape[r].length; c++) {
+          if (p.item.shape[r][c] === 3) anchorPointCells.add(`${p.row + r},${p.col + c}`);
+        }
+      }
+    }
+    for (const p of result) {
+      for (let r = 0; r < p.item.shape.length; r++) {
+        for (let c = 0; c < p.item.shape[r].length; c++) {
+          if (p.item.shape[r][c] === 4) {
+            expect(anchorPointCells.has(`${p.row + r},${p.col + c}`)).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
   it('places anchored items only when anchor support exists', () => {
     // anchor (4) on top must sit on an anchor point (3); attic has no ceiling anchors
     const hanging = makeItem({ name: 'hanging', comfort: 10, shape: [[4], [2]] });

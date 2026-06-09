@@ -5,6 +5,8 @@ import RoomGrid from './RoomGrid';
 import RoomStatsSummary from './RoomStatsSummary';
 import { getRoomLabel } from '../types/furniture';
 import { captureRoom, captureHouse } from '../utils/roomCapture';
+import { PRESETS } from '../utils/autoPopulate';
+import type { PresetKey } from '../utils/autoPopulate';
 
 const LEGEND: { type: number; color: string; border: string; label: string }[] = [
   { type: 2, color: 'var(--lavender-grey)', border: 'rgba(132,143,165,0.5)', label: 'Solid' },
@@ -29,15 +31,27 @@ interface Props {
   onRemove: (instanceId: string) => void;
   onMove: (instanceId: string, row: number, col: number) => void;
   onImportRooms: (entries: RoomExportEntry[][]) => void;
+  onAutoPopulate: (preset: PresetKey) => void;
   ownership: Record<string, number>;
 }
 
 export default function RoomDesignerWorkspace({
   visible, placed, rooms, activeRoom, onActiveRoomChange,
-  onPlace, onRemove, onMove, onImportRooms, ownership,
+  onPlace, onRemove, onMove, onImportRooms, onAutoPopulate, ownership,
 }: Props) {
   const [expertView, setExpertView] = useState(false);
+  const [preset, setPreset] = useState<PresetKey>('breeding');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAutoFill = () => {
+    if (
+      placed.length > 0 &&
+      !window.confirm(`Replace ${placed.length} item(s) in ${getRoomLabel(activeRoom)} with an auto-generated ${PRESETS[preset].label} layout?`)
+    ) {
+      return;
+    }
+    onAutoPopulate(preset);
+  };
 
   const containerStyle: CSSProperties = {
     display: 'flex',
@@ -158,9 +172,24 @@ export default function RoomDesignerWorkspace({
           onActiveRoomChange={onActiveRoomChange}
           ownership={ownership}
         />
-        <button style={{ ...toggleBtn, alignSelf: 'flex-start' }} onClick={() => setExpertView((v) => !v)}>
-          {expertView ? 'Image View' : 'Expert View'}
-        </button>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', alignSelf: 'flex-start' }}>
+          <select
+            value={preset}
+            onChange={(e) => setPreset(e.target.value as PresetKey)}
+            style={{ ...smallBtn, padding: '5px 8px' }}
+            title="Auto-fill preset"
+          >
+            {(Object.keys(PRESETS) as PresetKey[]).map((key) => (
+              <option key={key} value={key}>{PRESETS[key].label}</option>
+            ))}
+          </select>
+          <button style={smallBtn} onClick={handleAutoFill} title="Automatically fill this room with owned furniture">
+            Auto-fill
+          </button>
+          <button style={toggleBtn} onClick={() => setExpertView((v) => !v)}>
+            {expertView ? 'Image View' : 'Expert View'}
+          </button>
+        </div>
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0 }}>
         <RoomGrid

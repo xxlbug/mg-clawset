@@ -8,6 +8,8 @@ import FurnitureBrowser from './components/FurnitureBrowser';
 import RoomDesignerWorkspace from './components/RoomDesignerWorkspace';
 import SaveImportModal from './components/SaveImportModal';
 import { findAllAnchored, findAnchoredPieces, wouldCollide } from './utils/anchorHelpers';
+import { autoPopulateRoom } from './utils/autoPopulate';
+import type { PresetKey } from './utils/autoPopulate';
 import useIsMobile from './hooks/useIsMobile';
 
 function countSpaces(shape: number[][]): number {
@@ -241,6 +243,29 @@ function App() {
     });
   }, [updateActiveRoom, activeRoom]);
 
+  const handleAutoPopulate = useCallback((preset: PresetKey) => {
+    const usedInOtherRooms: Record<string, number> = {};
+    rooms.forEach((room, i) => {
+      if (i === activeRoom) return;
+      for (const p of room) {
+        usedInOtherRooms[p.item.id] = (usedInOtherRooms[p.item.id] || 0) + 1;
+      }
+    });
+    const result = autoPopulateRoom({
+      preset,
+      roomIndex: activeRoom,
+      allFurniture,
+      ownership,
+      usedInOtherRooms,
+      makeInstanceId: () => `placed-${nextInstanceId++}`,
+    });
+    if (result.length === 0) {
+      window.alert('Nothing to place: no owned furniture with remaining copies scores positively for this preset.');
+      return;
+    }
+    setRooms(prev => prev.map((room, i) => (i === activeRoom ? result : room)));
+  }, [rooms, activeRoom, ownership]);
+
   const handleSortChange = useCallback((field: SortField) => {
     setSort((prev) => ({
       field,
@@ -434,6 +459,7 @@ function App() {
             onRemove={handleRemoveFurniture}
             onMove={handleMoveFurniture}
             onImportRooms={handleImportRooms}
+            onAutoPopulate={handleAutoPopulate}
             ownership={ownership}
           />
         )}

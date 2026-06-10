@@ -384,20 +384,81 @@ function App() {
       localStorage.setItem(HOUSE_UNLOCKS_KEY, JSON.stringify(newHouseInfo));
     }
     if (placements) {
-      // Saved coords point at the bottom-left solid cell; our origin is the
-      // shape's top-left, so shift by the solid bounding box.
+      // Saved coords usually point at the top-left solid cell. Trinkets that
+      // are attached to another item's anchor point instead carry that anchor
+      // cell's coordinates — resolved below by snapping their anchor onto an
+      // already-placed anchor point (supporters come first in z-order).
       const byId = new Map(allFurniture.map((f) => [f.id, f]));
       const newRooms: PlacedFurniture[][] = Array.from({ length: NUM_ROOMS }, () => []);
-      for (const pl of placements) {
-        const item = byId.get(pl.itemId);
-        if (!item || pl.roomIndex < 0 || pl.roomIndex >= NUM_ROOMS) continue;
-        const { maxR, minC } = getVisualBounds(item.shape);
-        newRooms[pl.roomIndex].push({
-          instanceId: `placed-${nextInstanceId++}`,
-          item,
-          row: pl.row - maxR,
-          col: pl.col - minC,
-        });
+
+      const solidOffsets = (shape: number[][]) => {
+        const cells: [number, number][] = [];
+        shape.forEach((row, r) => row.forEach((t, c) => { if (t === 2 || t === 3) cells.push([r, c]); }));
+        return cells;
+      };
+      const anchorOffset = (shape: number[][]): [number, number] | null => {
+        for (let r = 0; r < shape.length; r++) {
+          for (let c = 0; c < shape[r].length; c++) {
+            if (shape[r][c] === 4) return [r, c];
+          }
+        }
+        return null;
+      };
+
+      // y semantics depend on the anchor direction of the shape:
+      // bottom-anchored items reference their bottom solid row, hanging and
+      // wall items their top solid row. Trinkets standing on furniture carry
+      // the supporter cell's coordinates — snapped on top when occupied.
+      const anchorDir = (shape: number[][]): 'below' | 'above' | 'none' => {
+        const sol = solidOffsets(shape);
+        const anc: [number, number][] = [];
+        shape.forEach((row, r) => row.forEach((t, c) => { if (t === 4) anc.push([r, c]); }));
+        if (anc.length === 0) return 'none';
+        const maxS = Math.max(...sol.map(([r]) => r));
+        const minS = Math.min(...sol.map(([r]) => r));
+        if (anc.every(([r]) => r > maxS)) return 'below';
+        if (anc.every(([r]) => r < minS)) return 'above';
+        return 'none';
+      };
+
+      for (let ri = 0; ri < NUM_ROOMS; ri++) {
+        const roomPls = placements.filter((pl) => pl.roomIndex === ri).sort((a, b) => a.order - b.order);
+        const occupied = new Set<string>();
+        for (const pl of roomPls) {
+          const item = byId.get(pl.itemId);
+          if (!item) continue;
+          const solids = solidOffsets(item.shape);
+          const minR = Math.min(...solids.map(([r]) => r));
+          const maxR = Math.max(...solids.map(([r]) => r));
+          const minC = Math.min(...solids.map(([, c]) => c));
+          const dir = anchorDir(item.shape);
+          const collides = (row0: number, col0: number) =>
+            solids.some(([r, c]) => occupied.has(`${row0 + r},${col0 + c}`));
+
+          // pl.row encodes bottom solid for standing items, top solid otherwise
+          let row0 = dir === 'below' ? pl.row - maxR : pl.row - minR;
+          let col0 = pl.col - minC;
+
+          if (collides(row0, col0) && dir === 'below' && occupied.has(`${pl.row},${pl.col}`)) {
+            // coordinate points at the cell it stands on — sit on top of it
+            const a = anchorOffset(item.shape);
+            if (a) {
+              const cand: [number, number] = [pl.row - a[0], pl.col - a[1]];
+              if (!collides(cand[0], cand[1])) {
+                row0 = cand[0];
+                col0 = cand[1];
+              }
+            }
+          }
+
+          for (const [r, c] of solids) occupied.add(`${row0 + r},${col0 + c}`);
+          newRooms[ri].push({
+            instanceId: `placed-${nextInstanceId++}`,
+            item,
+            row: row0,
+            col: col0,
+          });
+        }
       }
       setRooms(newRooms);
       setActiveRoom(HOUSE_VIEW);

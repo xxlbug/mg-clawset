@@ -7,12 +7,14 @@ export interface HouseInfo {
   regularRooms: number;
 }
 
-/** One item placed on a room grid in the game. row/col = bottom-left SOLID cell. */
+/** One item placed on a room grid in the game. row/col = top-left SOLID cell (or the anchor-point cell for attached trinkets). */
 export interface SavedPlacement {
   itemId: string;
   roomIndex: number;
   col: number;
   row: number;
+  /** In-game placement order; supporters come before the items attached to them. */
+  order: number;
 }
 
 export interface SavegameParseResult {
@@ -36,12 +38,13 @@ const ROOM_NAME_TO_INDEX: Record<string, number> = {
 };
 
 /**
- * Convert game placement coords to app grid cells (derived from a
- * controlled save: crystal ball at attic bottom-left = (-8,-10),
- * food boxes at Floor1_Small left wall rows 6..1 = (-10,-11..-6)).
+ * Convert game placement coords to app grid cells. x = leftmost solid
+ * column. y semantics differ by anchor direction (floor items at y=-11,
+ * ceiling-hung items at y=-5): callers map bottom-anchored items via the
+ * bottom solid row and hanging/wall items via the top solid row.
  */
-function gameCoordsToCell(roomIndex: number, x: number, y: number): { col: number; row: number } {
-  if (roomIndex === 4) return { col: x + 8, row: -y - 3 };
+export function gameCoordsToCell(roomIndex: number, x: number, y: number): { col: number; row: number } {
+  if (roomIndex === 4) return { col: x + 8, row: -y - 4 };
   return { col: x + 10, row: -y - 5 };
 }
 
@@ -90,6 +93,7 @@ interface FurnitureRow {
   room: string;
   x: number;
   y: number;
+  z: number;
 }
 
 /**
@@ -119,11 +123,13 @@ function parseFurnitureBlob(uint8Array: Uint8Array): FurnitureRow {
   }
   let x = 0;
   let y = 0;
-  if (off + 8 <= uint8Array.byteLength) {
+  let z = 0;
+  if (off + 12 <= uint8Array.byteLength) {
     x = view.getInt32(off, true);
     y = view.getInt32(off + 4, true);
+    z = view.getInt32(off + 8, true);
   }
-  return { furniture_name, quality, room, x, y };
+  return { furniture_name, quality, room, x, y, z };
 }
 
 function resolveItemId(name: string, quality: number, furnitureIdMap: Map<string, string>): string | undefined {
@@ -156,7 +162,7 @@ export async function parseSavegame(
           const roomIndex = ROOM_NAME_TO_INDEX[parsed.room];
           const { col, row: gridRow } = gameCoordsToCell(roomIndex, parsed.x, parsed.y);
           const itemId = resolveItemId(parsed.furniture_name, parsed.quality, furnitureIdMap);
-          if (itemId) placements.push({ itemId, roomIndex, col, row: gridRow });
+          if (itemId) placements.push({ itemId, roomIndex, col, row: gridRow, order: parsed.z });
         }
       } catch {
         // skip unparseable rows

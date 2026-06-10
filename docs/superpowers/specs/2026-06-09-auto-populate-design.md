@@ -152,3 +152,19 @@ User feedback: presets too generic; controls felt disconnected.
 - UI consolidated into one "Auto-fill ▾" button opening a popover panel:
   stat checkboxes (with stat icons), Quick/Maximize radio, "Fill <room>"
   button (disabled when no stat selected). Outside click closes panel.
+
+## Addendum (2026-06-10): Onboarding & game-companion UX
+
+- Welcome modal shows once (dismissal persisted in `mg-clawset-welcome-seen`);
+  cat logo reopens it. Modal gains a primary "Load savegame" CTA that opens
+  the savefile import dialog.
+- Room designer is open by default on desktop; savegame import auto-enables
+  the "Owned" filter so the list shows what the player actually has.
+- Attic is the default active room.
+- Auto-fill is the visually primary (accent) button in the designer header.
+- New "Checklist" panel: aggregated items of the active room (icon, count,
+  name) with persisted tick-off state (`mg-clawset-checklist`) and an
+  "n of m placed in game" progress line — for transferring layouts into
+  Mewgenics.
+- New "Focus" mode: hides the furniture browser entirely (full-width
+  designer) for playing alongside the game; "Exit focus" restores it.

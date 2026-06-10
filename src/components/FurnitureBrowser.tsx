@@ -67,6 +67,7 @@ export default function FurnitureBrowser({
       ...(isMobile ? { height: 'auto', overflow: 'visible', position: 'static' as const } : {}),
     }}>
       <FilterHeader
+        onLoadSavegame={onImportClick}
         filters={filters}
         onFiltersChange={onFiltersChange}
         sort={sort}

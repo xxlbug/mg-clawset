@@ -9,6 +9,7 @@ import { ALGORITHMS, ALL_STATS, STAT_LABELS } from '../utils/autoPopulate';
 import type { AlgorithmKey } from '../utils/autoPopulate';
 import type { StatKey } from '../types/furniture';
 import StatIcon from './StatIcon';
+import RoomChecklist from './RoomChecklist';
 
 const LEGEND: { type: number; color: string; border: string; label: string }[] = [
   { type: 2, color: 'var(--lavender-grey)', border: 'rgba(132,143,165,0.5)', label: 'Solid' },
@@ -35,11 +36,14 @@ interface Props {
   onImportRooms: (entries: RoomExportEntry[][]) => void;
   onAutoPopulate: (stats: StatKey[], algorithm: AlgorithmKey) => void;
   ownership: Record<string, number>;
+  focusMode: boolean;
+  onToggleFocusMode: () => void;
 }
 
 export default function RoomDesignerWorkspace({
   visible, placed, rooms, activeRoom, onActiveRoomChange,
   onPlace, onRemove, onMove, onImportRooms, onAutoPopulate, ownership,
+  focusMode, onToggleFocusMode,
 }: Props) {
   const [expertView, setExpertView] = useState(false);
   const [autoFillOpen, setAutoFillOpen] = useState(false);
@@ -47,6 +51,7 @@ export default function RoomDesignerWorkspace({
     () => new Set<StatKey>(['comfort', 'stimulation']),
   );
   const [algorithm, setAlgorithm] = useState<AlgorithmKey>('maximize');
+  const [checklistOpen, setChecklistOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const toggleStat = (stat: StatKey) => {
@@ -192,11 +197,32 @@ export default function RoomDesignerWorkspace({
         />
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', alignSelf: 'flex-start', position: 'relative' }}>
           <button
-            style={{ ...smallBtn, ...(autoFillOpen ? { background: 'var(--accent-bg)', color: 'var(--accent)' } : {}) }}
+            style={{
+              ...smallBtn,
+              background: autoFillOpen ? 'var(--accent-bg)' : 'var(--accent)',
+              color: autoFillOpen ? 'var(--accent)' : 'var(--bg)',
+              border: '1px solid var(--accent)',
+              fontWeight: 600,
+              padding: '6px 16px',
+            }}
             onClick={() => setAutoFillOpen((v) => !v)}
             title="Automatically fill this room with owned furniture"
           >
-            Auto-fill {autoFillOpen ? '\u25b4' : '\u25be'}
+            ✨ Auto-fill {autoFillOpen ? '\u25b4' : '\u25be'}
+          </button>
+          <button
+            style={{ ...smallBtn, ...(checklistOpen ? { background: 'var(--accent-bg)', color: 'var(--accent)' } : {}) }}
+            onClick={() => setChecklistOpen((v) => !v)}
+            title="Tick off this room's items while placing them in the game"
+          >
+            Checklist
+          </button>
+          <button
+            style={{ ...smallBtn, ...(focusMode ? { background: 'var(--accent-bg)', color: 'var(--accent)' } : {}) }}
+            onClick={onToggleFocusMode}
+            title={focusMode ? 'Show the furniture browser again' : 'Hide the furniture browser — compact view for playing alongside the game'}
+          >
+            {focusMode ? 'Exit focus' : 'Focus'}
           </button>
           <button style={toggleBtn} onClick={() => setExpertView((v) => !v)}>
             {expertView ? 'Image View' : 'Expert View'}
@@ -268,15 +294,18 @@ export default function RoomDesignerWorkspace({
           )}
         </div>
       </div>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0 }}>
-        <RoomGrid
-          placed={placed}
-          onPlace={onPlace}
-          onRemove={onRemove}
-          onMove={onMove}
-          expertView={expertView}
-          roomIndex={activeRoom}
-        />
+      <div style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0, minWidth: 0 }}>
+          <RoomGrid
+            placed={placed}
+            onPlace={onPlace}
+            onRemove={onRemove}
+            onMove={onMove}
+            expertView={expertView}
+            roomIndex={activeRoom}
+          />
+        </div>
+        {checklistOpen && <RoomChecklist placed={placed} roomIndex={activeRoom} />}
       </div>
       {expertView && (
         <div style={legendStyle}>

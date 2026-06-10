@@ -149,13 +149,16 @@ const bubbleStyle = (visible: boolean): CSSProperties => ({
   pointerEvents: visible ? 'auto' : 'none',
 });
 
+const WELCOME_SEEN_KEY = 'mg-clawset-welcome-seen';
+
 interface Props {
   compact?: boolean;
   isMobile?: boolean;
+  onLoadSavegame?: () => void;
 }
 
-export default function CatMascot({ compact, isMobile }: Props) {
-  const [helpOpen, setHelpOpen] = useState(true);
+export default function CatMascot({ compact, isMobile, onLoadSavegame }: Props) {
+  const [helpOpen, setHelpOpen] = useState(() => !localStorage.getItem(WELCOME_SEEN_KEY));
   const [helpVisible, setHelpVisible] = useState(false); // for animation
   const [helpDismissed, setHelpDismissed] = useState(false);
   const [adblockBubble, setAdblockBubble] = useState(false);
@@ -168,7 +171,7 @@ export default function CatMascot({ compact, isMobile }: Props) {
   }, []);
 
   // Animate help panel in/out
-  const [helpMounted, setHelpMounted] = useState(true); // DOM presence
+  const [helpMounted, setHelpMounted] = useState(helpOpen); // DOM presence
   useEffect(() => {
     if (helpOpen) {
       setHelpMounted(true);
@@ -193,6 +196,7 @@ export default function CatMascot({ compact, isMobile }: Props) {
   const dismissHelp = useCallback(() => {
     setHelpOpen(false);
     setHelpDismissed(true);
+    localStorage.setItem(WELCOME_SEEN_KEY, '1');
   }, []);
 
   const openHelp = useCallback((e: React.MouseEvent) => {
@@ -350,25 +354,43 @@ export default function CatMascot({ compact, isMobile }: Props) {
               </div>
             </div>
 
-            <div
-              style={{
-                marginTop: 4,
-                padding: '8px 24px',
-                borderRadius: 8,
-                background: 'var(--accent-bg)',
-                color: 'var(--accent)',
-                fontWeight: 500,
-                fontSize: 13,
-                cursor: 'pointer',
-                border: '1px solid var(--border)',
-              }}
-              onClick={dismissHelp}
-            >
-              Got it, let me browse!
+            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+              {!isMobile && onLoadSavegame && (
+                <div
+                  style={{
+                    padding: '8px 24px',
+                    borderRadius: 8,
+                    background: 'var(--accent)',
+                    color: 'var(--bg)',
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    border: '1px solid var(--accent)',
+                  }}
+                  onClick={() => { dismissHelp(); onLoadSavegame(); }}
+                >
+                  📂 Load savegame
+                </div>
+              )}
+              <div
+                style={{
+                  padding: '8px 24px',
+                  borderRadius: 8,
+                  background: 'var(--accent-bg)',
+                  color: 'var(--accent)',
+                  fontWeight: 500,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  border: '1px solid var(--border)',
+                }}
+                onClick={dismissHelp}
+              >
+                Got it, let me browse!
+              </div>
             </div>
 
             <div style={{ fontSize: 11, color: 'var(--text-m)' }}>
-              Click anywhere outside or the button to close. Click the cat anytime to reopen.
+              Shown once — click the cat anytime to reopen this help.
             </div>
           </div>
         </div>,

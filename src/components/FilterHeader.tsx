@@ -45,9 +45,10 @@ interface Props {
   statsPerSpace: boolean;
   onStatsPerSpaceChange: (v: boolean) => void;
   showRemaining?: boolean;
+  onLoadSavegame?: () => void;
 }
 
-export default function FilterHeader({ filters, onFiltersChange, sort, onSortChange, compact, isMobile, statsPerSpace, onStatsPerSpaceChange, showRemaining }: Props) {
+export default function FilterHeader({ filters, onFiltersChange, sort, onSortChange, compact, isMobile, statsPerSpace, onStatsPerSpaceChange, showRemaining, onLoadSavegame }: Props) {
   const update = (partial: Partial<Filters>) =>
     onFiltersChange({ ...filters, ...partial });
 
@@ -56,7 +57,7 @@ export default function FilterHeader({ filters, onFiltersChange, sort, onSortCha
       <div style={{ ...styles.wrapper, position: 'sticky', top: 0, zIndex: 10 }}>
         {/* Row 1: Cat + Name sort + Search */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px' }}>
-          <CatMascot compact={false} isMobile />
+          <CatMascot compact={false} isMobile onLoadSavegame={onLoadSavegame} />
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <SortButton label="Name" active={sort.field === 'name'} direction={sort.direction} onClick={() => onSortChange('name')} />
             <SearchInput value={filters.name} onChange={(v) => update({ name: v })} />
@@ -118,7 +119,7 @@ export default function FilterHeader({ filters, onFiltersChange, sort, onSortCha
   return (
     <div style={styles.wrapper}>
       <div style={headerGrid}>
-        <CatMascot compact={compact} />
+        <CatMascot compact={compact} onLoadSavegame={onLoadSavegame} />
         <SortButton
           label="Name"
           active={sort.field === 'name'}

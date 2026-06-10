@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import type { Filters, SortConfig, SortField, FurnitureItem, RawFurnitureItem, PlacedFurniture, StatKey } from './types/furniture';
-import { getRoomConfig } from './types/furniture';
+import { getRoomConfig, ATTIC_INDEX } from './types/furniture';
 import furnitureData from './data/furniture_data.json';
 import SplitScreenContainer from './components/SplitScreenContainer';
 import FurnitureBrowser from './components/FurnitureBrowser';
@@ -147,11 +147,12 @@ function App() {
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<SortConfig>(defaultSort);
   const [ownership, setOwnership] = useState<Record<string, number>>(loadOwnership);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [page, setPage] = useState(0);
   const [rooms, setRooms] = useState<PlacedFurniture[][]>(loadRooms);
-  const [activeRoom, setActiveRoom] = useState(0);
+  const [activeRoom, setActiveRoom] = useState(ATTIC_INDEX);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
   const [statsPerSpace, setStatsPerSpace] = useState(false);
 
   const placed = rooms[activeRoom];
@@ -286,6 +287,8 @@ function App() {
 
   const handleImportOwnership = useCallback((newOwnership: Record<string, number>) => {
     setOwnership(newOwnership);
+    // After loading a savegame, show what the player actually owns
+    setFilters((prev) => ({ ...prev, onlyOwned: true }));
   }, []);
 
   const handleImportRooms = useCallback((allEntries: { id: string; row: number; col: number }[][]) => {
@@ -423,7 +426,8 @@ function App() {
         <div
           style={{
             ...layoutStyles.browserWrapper,
-            width: isMobile ? '100%' : expanded ? '45%' : 'calc(100% - 24px)',
+            width: isMobile ? '100%' : focusMode && expanded ? '0%' : expanded ? '45%' : 'calc(100% - 24px)',
+            ...(focusMode && expanded && !isMobile ? { overflow: 'hidden', opacity: 0, pointerEvents: 'none' as const } : {}),
             ...(isMobile ? { height: 'auto', overflow: 'visible', transition: 'none', position: 'static' as const } : {}),
           }}
         >
@@ -462,6 +466,8 @@ function App() {
             onImportRooms={handleImportRooms}
             onAutoPopulate={handleAutoPopulate}
             ownership={ownership}
+            focusMode={focusMode}
+            onToggleFocusMode={() => setFocusMode((v) => !v)}
           />
         )}
       </SplitScreenContainer>

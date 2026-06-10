@@ -15,7 +15,6 @@ import type { AlgorithmKey, StatWeights } from './utils/autoPopulate';
 import useIsMobile from './hooks/useIsMobile';
 import { parseSavegame } from './utils/savegame';
 import type { HouseInfo, SavedPlacement } from './utils/savegame';
-import { getVisualBounds } from './utils/gridHelpers';
 import { saveSavefileHandle, loadSavefileHandle, readRememberedSavefile } from './utils/savefileHandle';
 
 function countSpaces(shape: number[][]): number {

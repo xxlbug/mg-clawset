@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import type { Filters, SortConfig, SortField, FurnitureItem, RawFurnitureItem, PlacedFurniture, StatKey } from './types/furniture';
-import { getRoomConfig, ATTIC_INDEX } from './types/furniture';
+import { getRoomConfig, ATTIC_INDEX, HOUSE_VIEW } from './types/furniture';
 import furnitureData from './data/furniture_data.json';
 import SplitScreenContainer from './components/SplitScreenContainer';
 import FurnitureBrowser from './components/FurnitureBrowser';
@@ -14,6 +14,7 @@ import { autoPopulateRoom } from './utils/autoPopulate';
 import type { AlgorithmKey } from './utils/autoPopulate';
 import useIsMobile from './hooks/useIsMobile';
 import { parseSavegame } from './utils/savegame';
+import type { HouseInfo } from './utils/savegame';
 import { saveSavefileHandle, loadSavefileHandle, readRememberedSavefile } from './utils/savefileHandle';
 
 function countSpaces(shape: number[][]): number {
@@ -65,6 +66,15 @@ for (const item of allFurniture) {
 }
 
 const HERO_SEEN_KEY = 'mg-clawset-hero-seen';
+const HOUSE_UNLOCKS_KEY = 'mg-clawset-house-unlocks';
+
+function loadHouseInfo(): HouseInfo | null {
+  try {
+    const raw = localStorage.getItem(HOUSE_UNLOCKS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return null;
+}
 
 const defaultFilters: Filters = {
   name: '',
@@ -166,13 +176,20 @@ function App() {
   const [statsPerSpace, setStatsPerSpace] = useState(false);
   const [savefileName, setSavefileName] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
+  const [houseInfo, setHouseInfo] = useState<HouseInfo | null>(loadHouseInfo);
+
+  const isRoomUnlocked = useCallback((i: number): boolean => {
+    if (!houseInfo) return true; // unknown: assume everything available
+    if (i === ATTIC_INDEX) return houseInfo.atticUnlocked;
+    return i < houseInfo.regularRooms;
+  }, [houseInfo]);
 
   // Surface the remembered savefile (if any) in the header
   useEffect(() => {
     loadSavefileHandle().then((h) => { if (h) setSavefileName(h.name); });
   }, []);
 
-  const placed = rooms[activeRoom];
+  const placed = activeRoom === HOUSE_VIEW ? rooms.flat() : rooms[activeRoom];
 
   const dismissHero = useCallback(() => {
     setHeroSeen(true);
@@ -262,6 +279,40 @@ function App() {
   }, [updateActiveRoom, activeRoom]);
 
   const handleAutoPopulate = useCallback((stats: StatKey[], algorithm: AlgorithmKey) => {
+    const makeInstanceId = () => `placed-${nextInstanceId++}`;
+
+    if (activeRoom === HOUSE_VIEW) {
+      // Fill the whole house: attic first (largest), then rooms in order.
+      // Locked rooms keep their content and their items stay reserved.
+      const fillOrder = [ATTIC_INDEX, 0, 1, 2, 3].filter(isRoomUnlocked);
+      const newRooms = rooms.map((room, i) => (fillOrder.includes(i) ? [] : [...room]));
+      const used: Record<string, number> = {};
+      for (const room of newRooms) {
+        for (const p of room) used[p.item.id] = (used[p.item.id] || 0) + 1;
+      }
+      let placedTotal = 0;
+      for (const ri of fillOrder) {
+        const result = autoPopulateRoom({
+          stats,
+          algorithm,
+          roomIndex: ri,
+          allFurniture,
+          ownership,
+          usedInOtherRooms: { ...used },
+          makeInstanceId,
+        });
+        newRooms[ri] = result;
+        placedTotal += result.length;
+        for (const p of result) used[p.item.id] = (used[p.item.id] || 0) + 1;
+      }
+      if (placedTotal === 0) {
+        window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
+        return;
+      }
+      setRooms(newRooms);
+      return;
+    }
+
     const usedInOtherRooms: Record<string, number> = {};
     rooms.forEach((room, i) => {
       if (i === activeRoom) return;
@@ -276,14 +327,14 @@ function App() {
       allFurniture,
       ownership,
       usedInOtherRooms,
-      makeInstanceId: () => `placed-${nextInstanceId++}`,
+      makeInstanceId,
     });
     if (result.length === 0) {
       window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
       return;
     }
     setRooms(prev => prev.map((room, i) => (i === activeRoom ? result : room)));
-  }, [rooms, activeRoom, ownership]);
+  }, [rooms, activeRoom, ownership, isRoomUnlocked]);
 
   const handleSortChange = useCallback((field: SortField) => {
     setSort((prev) => ({
@@ -302,10 +353,14 @@ function App() {
     setOwnership((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
   }, []);
 
-  const handleImportOwnership = useCallback((newOwnership: Record<string, number>) => {
+  const handleImportOwnership = useCallback((newOwnership: Record<string, number>, newHouseInfo: HouseInfo | null = null) => {
     setOwnership(newOwnership);
     // After loading a savegame, show what the player actually owns
     setFilters((prev) => ({ ...prev, onlyOwned: true }));
+    if (newHouseInfo) {
+      setHouseInfo(newHouseInfo);
+      localStorage.setItem(HOUSE_UNLOCKS_KEY, JSON.stringify(newHouseInfo));
+    }
   }, []);
 
   const openImportModal = useCallback(() => {
@@ -325,9 +380,9 @@ function App() {
     try {
       const remembered = await readRememberedSavefile();
       if (remembered) {
-        const { ownership: newOwnership } = await parseSavegame(remembered.data, furnitureIdMap);
+        const { ownership: newOwnership, houseInfo: hi } = await parseSavegame(remembered.data, furnitureIdMap);
         if (Object.keys(newOwnership).length > 0) {
-          handleImportOwnership(newOwnership);
+          handleImportOwnership(newOwnership, hi);
           return;
         }
       }
@@ -482,8 +537,26 @@ function App() {
           reloading={reloading}
         />
       )}
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
       <SplitScreenContainer>
+        {!isMobile && (
+          <RoomDesignerWorkspace
+            visible
+            placed={placed}
+            rooms={rooms}
+            activeRoom={activeRoom}
+            onActiveRoomChange={setActiveRoom}
+            onPlace={handlePlaceFurniture}
+            onRemove={handleRemoveFurniture}
+            onMove={handleMoveFurniture}
+            onImportRooms={handleImportRooms}
+            onAutoPopulate={handleAutoPopulate}
+            ownership={ownership}
+            drawerOpen={drawerOpen}
+            onToggleDrawer={() => setDrawerOpen((v) => !v)}
+            isRoomUnlocked={isRoomUnlocked}
+          />
+        )}
         <div
           style={{
             ...layoutStyles.browserWrapper,
@@ -514,22 +587,30 @@ function App() {
             usedCounts={usedCounts}
           />
         </div>
-        {!isMobile && (
-          <RoomDesignerWorkspace
-            visible
-            placed={placed}
-            rooms={rooms}
-            activeRoom={activeRoom}
-            onActiveRoomChange={setActiveRoom}
-            onPlace={handlePlaceFurniture}
-            onRemove={handleRemoveFurniture}
-            onMove={handleMoveFurniture}
-            onImportRooms={handleImportRooms}
-            onAutoPopulate={handleAutoPopulate}
-            ownership={ownership}
-            drawerOpen={drawerOpen}
-            onToggleDrawer={() => setDrawerOpen((v) => !v)}
-          />
+        {!isMobile && !drawerOpen && (
+          <button
+            onClick={() => setDrawerOpen(true)}
+            title="Show furniture list"
+            style={{
+              position: 'absolute',
+              right: 0,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: 20,
+              height: 60,
+              borderRadius: '8px 0 0 8px',
+              border: '1px solid var(--border)',
+              borderRight: 'none',
+              background: 'var(--code-bg)',
+              color: 'var(--text)',
+              cursor: 'pointer',
+              fontSize: 14,
+              padding: 0,
+              zIndex: 20,
+            }}
+          >
+            ◂
+          </button>
         )}
       </SplitScreenContainer>
       </div>

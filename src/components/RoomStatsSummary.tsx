@@ -112,9 +112,10 @@ interface Props {
   activeRoom: number;
   onActiveRoomChange: (i: number) => void;
   ownership: Record<string, number>;
+  isRoomUnlocked: (i: number) => boolean;
 }
 
-export default function RoomStatsSummary({ rooms, activeRoom, onActiveRoomChange, ownership }: Props) {
+export default function RoomStatsSummary({ rooms, activeRoom, onActiveRoomChange, ownership, isRoomUnlocked }: Props) {
   // House totals
   const houseTotals: Record<StatKey, number> = { appeal: 0, comfort: 0, stimulation: 0, health: 0, mutation: 0 };
   let totalItems = 0;
@@ -149,9 +150,19 @@ export default function RoomStatsSummary({ rooms, activeRoom, onActiveRoomChange
         totals={houseTotals}
         count={`${totalItems} total${missing > 0 ? ` · ${missing} missing` : ''}`}
         highlight
+        active={activeRoom === -1}
+        onClick={() => onActiveRoomChange(-1)}
       />
       <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
       {rooms.map((room, i) => {
+        if (!isRoomUnlocked(i)) {
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px', fontSize: 11, color: 'var(--text-m)', opacity: 0.55 }}>
+              <span style={{ fontWeight: 600, minWidth: 48 }}>{getRoomLabel(i)}</span>
+              <span>🔒 not yet unlocked in game</span>
+            </div>
+          );
+        }
         const totals = computeTotals(room);
         return (
           <StatRow

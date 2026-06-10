@@ -3,13 +3,14 @@ import type { CSSProperties } from 'react';
 import type { FurnitureItem, PlacedFurniture } from '../types/furniture';
 import RoomGrid from './RoomGrid';
 import RoomStatsSummary from './RoomStatsSummary';
-import { getRoomLabel } from '../types/furniture';
+import { getRoomLabel, HOUSE_VIEW } from '../types/furniture';
 import { captureRoom, captureHouse } from '../utils/roomCapture';
 import { ALGORITHMS, ALL_STATS, STAT_LABELS } from '../utils/autoPopulate';
 import type { AlgorithmKey } from '../utils/autoPopulate';
 import type { StatKey } from '../types/furniture';
 import StatIcon from './StatIcon';
 import RoomChecklist from './RoomChecklist';
+import HouseView from './HouseView';
 
 const LEGEND: { type: number; color: string; border: string; label: string }[] = [
   { type: 2, color: 'var(--lavender-grey)', border: 'rgba(132,143,165,0.5)', label: 'Solid' },
@@ -38,12 +39,13 @@ interface Props {
   ownership: Record<string, number>;
   drawerOpen: boolean;
   onToggleDrawer: () => void;
+  isRoomUnlocked: (i: number) => boolean;
 }
 
 export default function RoomDesignerWorkspace({
   visible, placed, rooms, activeRoom, onActiveRoomChange,
   onPlace, onRemove, onMove, onImportRooms, onAutoPopulate, ownership,
-  drawerOpen, onToggleDrawer,
+  drawerOpen, onToggleDrawer, isRoomUnlocked,
 }: Props) {
   const [expertView, setExpertView] = useState(false);
   const [autoFillOpen, setAutoFillOpen] = useState(false);
@@ -82,14 +84,14 @@ export default function RoomDesignerWorkspace({
     background: 'var(--code-bg)',
     borderRadius: 16,
     border: '1px solid var(--border)',
-    marginLeft: 16,
+    marginRight: 16,
     minHeight: 0,
     minWidth: 0,
     overflow: 'hidden',
-    transition: 'flex 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), margin-left 0.4s cubic-bezier(0.4, 0, 0.2, 1), padding 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+    transition: 'flex 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), margin-right 0.4s cubic-bezier(0.4, 0, 0.2, 1), padding 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
     flex: visible ? '1 1 0%' : '0 0 0%',
     opacity: visible ? 1 : 0,
-    ...(visible ? {} : { marginLeft: 0, border: 'none' }),
+    ...(visible ? {} : { marginRight: 0, border: 'none' }),
     padding: visible ? 16 : 0,
     gap: 12,
   };
@@ -194,6 +196,7 @@ export default function RoomDesignerWorkspace({
           activeRoom={activeRoom}
           onActiveRoomChange={onActiveRoomChange}
           ownership={ownership}
+          isRoomUnlocked={isRoomUnlocked}
         />
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', alignSelf: 'flex-start', position: 'relative' }}>
           <button
@@ -222,7 +225,7 @@ export default function RoomDesignerWorkspace({
             onClick={onToggleDrawer}
             title={drawerOpen ? 'Hide the furniture list' : 'Show the furniture list to browse and drag items manually'}
           >
-            {drawerOpen ? 'Hide furniture' : '◂ Furniture'}
+            {drawerOpen ? 'Hide furniture' : 'Furniture ▸'}
           </button>
           <button style={toggleBtn} onClick={() => setExpertView((v) => !v)}>
             {expertView ? 'Image View' : 'Expert View'}
@@ -296,14 +299,18 @@ export default function RoomDesignerWorkspace({
       </div>
       <div style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0 }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0, minWidth: 0 }}>
-          <RoomGrid
-            placed={placed}
-            onPlace={onPlace}
-            onRemove={onRemove}
-            onMove={onMove}
-            expertView={expertView}
-            roomIndex={activeRoom}
-          />
+          {activeRoom === HOUSE_VIEW ? (
+            <HouseView rooms={rooms} isRoomUnlocked={isRoomUnlocked} onSelectRoom={onActiveRoomChange} />
+          ) : (
+            <RoomGrid
+              placed={placed}
+              onPlace={onPlace}
+              onRemove={onRemove}
+              onMove={onMove}
+              expertView={expertView}
+              roomIndex={activeRoom}
+            />
+          )}
         </div>
         {checklistOpen && <RoomChecklist placed={placed} roomIndex={activeRoom} />}
       </div>
@@ -333,9 +340,11 @@ export default function RoomDesignerWorkspace({
         flexWrap: 'wrap',
       }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <button style={smallBtn} onClick={() => captureRoom(rooms, activeRoom)} title={`Save image of ${getRoomLabel(activeRoom)}`}>
-            Save image of {getRoomLabel(activeRoom)}
-          </button>
+          {activeRoom !== HOUSE_VIEW && (
+            <button style={smallBtn} onClick={() => captureRoom(rooms, activeRoom)} title={`Save image of ${getRoomLabel(activeRoom)}`}>
+              Save image of {getRoomLabel(activeRoom)}
+            </button>
+          )}
           <button style={smallBtn} onClick={() => captureHouse(rooms)} title="Save image of all rooms">
             Save image of a house
           </button>

@@ -90,6 +90,10 @@ export function getRoomConfig(roomIndex: number): RoomConfig {
   return roomIndex === ATTIC_INDEX ? ATTIC_CONFIG : REGULAR_CONFIG;
 }
 
+/** Pseudo room index for the whole-house overview. */
+export const HOUSE_VIEW = -1;
+
 export function getRoomLabel(roomIndex: number): string {
+  if (roomIndex === HOUSE_VIEW) return 'House';
   return roomIndex === ATTIC_INDEX ? 'Attic' : `Room ${roomIndex + 1}`;
 }

@@ -201,3 +201,28 @@ side panel; welcome modal was a text wall with buried actions.
   handle, re-reads the file from disk, re-imports ownership — one click.
   Any failure (no handle, permission denied, file moved) falls back to the
   import dialog.
+
+## Addendum (2026-06-10, #4): Savefile picker fix, right drawer, house view
+
+- **Picker fix**: Chrome's File System Access picker blocklists %APPDATA%,
+  where Mewgenics saves live ("can't open this file… system files"). Modal
+  reverted to the classic file input, plus a drag-and-drop zone — dropped
+  files yield handles via `DataTransferItem.getAsFileSystemHandle()` even
+  from blocklisted paths, so dragging the .sav once still enables one-click
+  re-load.
+- **Drawer moved to the right**: designer left, furniture drawer right;
+  opens via "Furniture ▸" button or a slim slide tab on the right edge;
+  closes via the drawer's left-edge arrow or "Hide furniture".
+- **Room unlock detection**: `files.house_unlocks` in the savegame is parsed
+  (current house + unlock entries; every non-attic entry = one regular
+  room). Locked rooms show greyed with a lock in the summary and house
+  view, and are skipped by auto-fill. Persisted in
+  `mg-clawset-house-unlocks`.
+- **House view**: the "House" summary row is selectable and shows all rooms
+  in the game's arrangement (attic top, Room 4/3, Room 1/2 — same as the
+  image export). Clicking a mini room opens it. Auto-fill in house view
+  fills the whole house attic-first with cross-room remaining accounting;
+  "Save image of a house" is the capture action.
+- Discovered for later: `files.house_state` contains the in-game furniture
+  placements (room name + coordinates) — could power "import current
+  layout from save".

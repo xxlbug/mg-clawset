@@ -17,6 +17,9 @@ declare global {
     queryPermission?: (desc: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
     requestPermission?: (desc: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
   }
+  interface DataTransferItem {
+    getAsFileSystemHandle?: () => Promise<FileSystemHandle | null>;
+  }
 }
 
 const DB_NAME = 'mg-clawset';

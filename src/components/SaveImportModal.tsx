@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { parseSavegame } from '../utils/savegame';
-import { isFilePickerSupported } from '../utils/savefileHandle';
+import type { HouseInfo } from '../utils/savegame';
 
 const overlay: CSSProperties = {
   position: 'fixed',
@@ -102,7 +102,7 @@ const statusText: CSSProperties = {
 interface Props {
   open: boolean;
   onClose: () => void;
-  onImport: (ownership: Record<string, number>) => void;
+  onImport: (ownership: Record<string, number>, houseInfo: HouseInfo | null) => void;
   furnitureIdMap: Map<string, string>; // lowercase name -> id
   /** Called when the file was picked via the File System Access API (Chromium) so the handle can be remembered. */
   onHandleCaptured?: (handle: FileSystemFileHandle) => void;
@@ -128,12 +128,12 @@ export default function SaveImportModal({ open, onClose, onImport, furnitureIdMa
       const uint8Array = new Uint8Array(arrayBuffer);
 
       setStatus('Parsing furniture data...');
-      const { ownership: newOwnership, matched, unmatchedNames } = await parseSavegame(uint8Array, furnitureIdMap);
+      const { ownership: newOwnership, matched, unmatchedNames, houseInfo } = await parseSavegame(uint8Array, furnitureIdMap);
 
-      console.log('[SaveImport] Matched:', matched, 'Unmatched:', unmatchedNames);
+      console.log('[SaveImport] Matched:', matched, 'Unmatched:', unmatchedNames, 'House:', houseInfo);
 
       setStatus(`Found ${matched} furniture types (${unmatchedNames.length} unmatched). Importing...`);
-      onImport(newOwnership);
+      onImport(newOwnership, houseInfo);
 
       setTimeout(() => {
         setStatus('');
@@ -185,26 +185,40 @@ export default function SaveImportModal({ open, onClose, onImport, furnitureIdMa
 
         <label
           style={fileLabel}
-          onClick={async () => {
-            if (isFilePickerSupported()) {
+          onClick={() => fileRef.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={async (e) => {
+            e.preventDefault();
+            const item = e.dataTransfer.items?.[0];
+            // Drag-and-drop hands out handles even for %APPDATA% files,
+            // which the showOpenFilePicker blocklist refuses.
+            if (item?.getAsFileSystemHandle) {
               try {
-                const [handle] = await window.showOpenFilePicker!({
-                  types: [{ description: 'Mewgenics save', accept: { 'application/octet-stream': ['.sav', '.db', '.sqlite'] } }],
-                });
-                setFile(await handle.getFile());
-                setError('');
-                setStatus('');
-                onHandleCaptured?.(handle);
-                return;
-              } catch {
-                return; // user cancelled the picker
-              }
+                const handle = await item.getAsFileSystemHandle();
+                if (handle && handle.kind === 'file') {
+                  const fh = handle as FileSystemFileHandle;
+                  setFile(await fh.getFile());
+                  setError('');
+                  setStatus('');
+                  onHandleCaptured?.(fh);
+                  return;
+                }
+              } catch { /* fall through to plain File */ }
             }
-            fileRef.current?.click();
+            const f = e.dataTransfer.files?.[0] ?? null;
+            if (f) {
+              setFile(f);
+              setError('');
+              setStatus('');
+            }
           }}
         >
-          {file ? `📁 ${file.name}` : 'Click to select .sav file'}
+          {file ? `📁 ${file.name}` : 'Click to select your .sav file — or drag it here'}
         </label>
+
+        <p style={{ ...paragraph, fontSize: 11, color: 'var(--text-m)', marginTop: 6 }}>
+          Tip: drag the file here to enable one-click “Re-load savegame” later (Chrome/Edge).
+        </p>
 
         {status && <div style={{ ...statusText, color: 'var(--text)' }}>{status}</div>}
         {error && <div style={{ ...statusText, color: 'var(--blushed-brick)' }}>{error}</div>}

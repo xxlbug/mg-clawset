@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { FurnitureItem, PlacedFurniture } from '../types/furniture';
 import { getRoomLabel } from '../types/furniture';
@@ -24,6 +24,8 @@ interface Props {
   roomIndex: number;
   /** itemId -> legend number shown when labels are on. */
   numbers?: Record<string, number> | null;
+  hoverItemId?: string | null;
+  onHoverItem?: (id: string | null) => void;
 }
 
 /**
@@ -31,8 +33,15 @@ interface Props {
  * while placing the items in the actual game. Checked state is persisted
  * per room + item in localStorage.
  */
-export default function RoomChecklist({ placed, roomIndex, numbers }: Props) {
+export default function RoomChecklist({ placed, roomIndex, numbers, hoverItemId, onHoverItem }: Props) {
   const [checked, setChecked] = useState<Record<string, boolean>>(loadChecked);
+  const rowRefs = useRef<Map<string, HTMLLabelElement>>(new Map());
+
+  // When a piece in the room is hovered, bring its row into view
+  useEffect(() => {
+    if (!hoverItemId) return;
+    rowRefs.current.get(hoverItemId)?.scrollIntoView({ block: 'nearest' });
+  }, [hoverItemId]);
 
   const entries: Entry[] = useMemo(() => {
     const byId = new Map<string, Entry>();
@@ -68,7 +77,7 @@ export default function RoomChecklist({ placed, roomIndex, numbers }: Props) {
     background: 'var(--social-bg)',
   };
 
-  const rowStyle = (isChecked: boolean): CSSProperties => ({
+  const rowStyle = (isChecked: boolean, isHovered: boolean): CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
     gap: 8,
@@ -77,7 +86,10 @@ export default function RoomChecklist({ placed, roomIndex, numbers }: Props) {
     textDecoration: isChecked ? 'line-through' : 'none',
     opacity: isChecked ? 0.6 : 1,
     cursor: 'pointer',
-    padding: '2px 0',
+    padding: '2px 4px',
+    borderRadius: 6,
+    background: isHovered ? 'var(--accent-bg)' : 'transparent',
+    border: isHovered ? '1px solid var(--accent)' : '1px solid transparent',
   });
 
   return (
@@ -94,8 +106,16 @@ export default function RoomChecklist({ placed, roomIndex, numbers }: Props) {
           <div style={{ overflowY: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
             {entries.map((e) => {
               const isChecked = !!checked[`${roomIndex}:${e.item.id}`];
+              const isHovered = hoverItemId === e.item.id;
               return (
-                <label key={e.item.id} style={rowStyle(isChecked)}>
+                <label
+                  key={e.item.id}
+                  data-check-id={e.item.id}
+                  ref={(el) => { if (el) rowRefs.current.set(e.item.id, el); else rowRefs.current.delete(e.item.id); }}
+                  onMouseEnter={() => onHoverItem?.(e.item.id)}
+                  onMouseLeave={() => onHoverItem?.(null)}
+                  style={rowStyle(isChecked, isHovered)}
+                >
                   <input
                     type="checkbox"
                     checked={isChecked}

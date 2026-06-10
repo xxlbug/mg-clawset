@@ -85,3 +85,46 @@ export function canPlace(
   }
   return true;
 }
+
+export function getVisualBounds(shape: number[][]): { minR: number; maxR: number; minC: number; maxC: number } {
+  let minR = shape.length;
+  let maxR = -1;
+  let minC = shape[0]?.length ?? 0;
+  let maxC = -1;
+  for (let r = 0; r < shape.length; r++) {
+    for (let c = 0; c < shape[r].length; c++) {
+      const t = shape[r][c];
+      if (t === 2 || t === 3 || t === 5) {
+        if (r < minR) minR = r;
+        if (r > maxR) maxR = r;
+        if (c < minC) minC = c;
+        if (c > maxC) maxC = c;
+      }
+    }
+  }
+  if (maxR === -1) {
+    minR = 0;
+    maxR = shape.length - 1;
+    minC = 0;
+    maxC = Math.max(...shape.map((row) => row.length)) - 1;
+  }
+  return { minR, maxR, minC, maxC };
+}
+
+export function getImageAlignment(shape: number[][]): 'top' | 'bottom' | 'center' {
+  const vis = getVisualBounds(shape);
+
+  let topHasAnchorPoint = false;
+  if (vis.minR >= 0 && vis.minR < shape.length) {
+    topHasAnchorPoint = shape[vis.minR].some(c => c === 3);
+  }
+
+  let hasAnchorBelow = false;
+  for (let r = vis.maxR + 1; r < shape.length; r++) {
+    if (shape[r].some(c => c === 4)) { hasAnchorBelow = true; break; }
+  }
+
+  if (hasAnchorBelow) return 'bottom';
+  if (topHasAnchorPoint) return 'top';
+  return 'center';
+}

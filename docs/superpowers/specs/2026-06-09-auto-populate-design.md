@@ -245,3 +245,16 @@ side panel; welcome modal was a text wall with buried actions.
   (e.g. Idol of Chaos, −5 comfort), placed once each, survives
   ruin-and-recreate. Chastity/Chaos behavioral notes shown as tooltips.
   House-wide fill: idols disabled with a hint to fill a single room.
+
+## Addendum (2026-06-10, #6): Hover linking + house view images
+
+- Bidirectional hover: hovering a checklist row highlights all matching
+  placed pieces (outline + tinted, badge turns accent); hovering a placed
+  piece highlights its checklist row and scrolls it into view.
+- Thin dashed connector lines (SVG overlay across the grid+checklist
+  container) drawn from the hovered checklist row to every matching piece;
+  measured via data attributes + getBoundingClientRect in a rAF.
+- House view mini rooms now render actual furniture images (same placement
+  math as the room grid) instead of expert-style colored cells — it looked
+  like expert view had been force-enabled. Visual-bounds helpers moved to
+  gridHelpers.ts (also fixes react-refresh lint).

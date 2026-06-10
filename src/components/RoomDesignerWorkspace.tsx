@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useLayoutEffect } from 'react';
 import type { CSSProperties } from 'react';
 import type { FurnitureItem, PlacedFurniture } from '../types/furniture';
 import RoomGrid from './RoomGrid';
@@ -58,7 +58,43 @@ export default function RoomDesignerWorkspace({
   const [selectedIdols, setSelectedIdols] = useState<Set<string>>(() => new Set());
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [labelsOn, setLabelsOn] = useState(false);
+  const [hoverItem, setHoverItem] = useState<string | null>(null);
+  const [connectorLines, setConnectorLines] = useState<{ x1: number; y1: number; x2: number; y2: number }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const linkRootRef = useRef<HTMLDivElement>(null);
+
+  // Thin connector lines from the hovered checklist row to every matching placed piece
+  useLayoutEffect(() => {
+    const id = requestAnimationFrame(() => {
+      const root = linkRootRef.current;
+      if (!hoverItem || !checklistOpen || !root) {
+        setConnectorLines([]);
+        return;
+      }
+      const rootRect = root.getBoundingClientRect();
+      const row = root.querySelector(`[data-check-id="${CSS.escape(hoverItem)}"]`);
+      const pieces = root.querySelectorAll(`[data-piece-id="${CSS.escape(hoverItem)}"]`);
+      if (!row || pieces.length === 0) {
+        setConnectorLines([]);
+        return;
+      }
+      const rowRect = row.getBoundingClientRect();
+      const x1 = rowRect.left - rootRect.left;
+      const y1 = rowRect.top + rowRect.height / 2 - rootRect.top;
+      const lines: { x1: number; y1: number; x2: number; y2: number }[] = [];
+      pieces.forEach((el) => {
+        const r = el.getBoundingClientRect();
+        lines.push({
+          x1,
+          y1,
+          x2: r.left + r.width / 2 - rootRect.left,
+          y2: r.top + r.height / 2 - rootRect.top,
+        });
+      });
+      setConnectorLines(lines);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [hoverItem, checklistOpen, placed, labelsOn]);
 
   // Legend numbers: alphabetical unique items of the active room (matches checklist order)
   const labelNumbers = useMemo(() => {
@@ -367,7 +403,7 @@ export default function RoomDesignerWorkspace({
           )}
         </div>
       </div>
-      <div style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0 }}>
+      <div ref={linkRootRef} style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0, position: 'relative' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0, minWidth: 0 }}>
           {activeRoom === HOUSE_VIEW ? (
             <HouseView rooms={rooms} isRoomUnlocked={isRoomUnlocked} onSelectRoom={onActiveRoomChange} />
@@ -380,10 +416,34 @@ export default function RoomDesignerWorkspace({
               expertView={expertView}
               roomIndex={activeRoom}
               labelNumbers={labelsOn ? labelNumbers : null}
+              hoverItemId={hoverItem}
+              onHoverItem={setHoverItem}
             />
           )}
         </div>
-        {checklistOpen && <RoomChecklist placed={placed} roomIndex={activeRoom} numbers={labelsOn ? labelNumbers : null} />}
+        {checklistOpen && (
+          <RoomChecklist
+            placed={placed}
+            roomIndex={activeRoom}
+            numbers={labelsOn ? labelNumbers : null}
+            hoverItemId={hoverItem}
+            onHoverItem={setHoverItem}
+          />
+        )}
+        {connectorLines.length > 0 && (
+          <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 30 }}>
+            {connectorLines.map((l, i) => (
+              <line
+                key={i}
+                x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
+                stroke="var(--accent)"
+                strokeWidth={1.5}
+                strokeDasharray="4 3"
+                opacity={0.8}
+              />
+            ))}
+          </svg>
+        )}
       </div>
       {expertView && (
         <div style={legendStyle}>

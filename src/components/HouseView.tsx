@@ -1,12 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { PlacedFurniture } from '../types/furniture';
 import { getRoomConfig, getRoomLabel, ATTIC_INDEX } from '../types/furniture';
-
-const CELL_COLORS: Record<number, string> = {
-  2: 'var(--lavender-grey)',
-  3: 'var(--blushed-brick)',
-  5: 'var(--charcoal)',
-};
+import { getVisualBounds, getImageAlignment } from '../utils/gridHelpers';
 
 interface Props {
   rooms: PlacedFurniture[][];
@@ -21,21 +16,6 @@ function MiniRoom({ roomIndex, placed, unlocked, onSelect }: {
   onSelect: () => void;
 }) {
   const cfg = getRoomConfig(roomIndex);
-
-  // Cell type per grid position (solid / anchor point / background)
-  const grid: (number | null)[][] = Array.from({ length: cfg.rows }, () => Array(cfg.cols).fill(null));
-  for (const p of placed) {
-    for (let r = 0; r < p.item.shape.length; r++) {
-      for (let c = 0; c < p.item.shape[r].length; c++) {
-        const t = p.item.shape[r][c];
-        if (t !== 1 && t !== 4) {
-          const gr = p.row + r;
-          const gc = p.col + c;
-          if (gr >= 0 && gr < cfg.rows && gc >= 0 && gc < cfg.cols) grid[gr][gc] = t;
-        }
-      }
-    }
-  }
 
   const wrapper: CSSProperties = {
     position: 'relative',
@@ -61,27 +41,67 @@ function MiniRoom({ roomIndex, placed, unlocked, onSelect }: {
           {unlocked ? `${placed.length} item${placed.length !== 1 ? 's' : ''}` : '🔒 locked'}
         </span>
       </div>
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${cfg.cols}, 1fr)`,
-        gap: 1,
-      }}>
-        {grid.map((row, r) =>
-          row.map((cell, c) => {
-            const valid = cfg.isValidCell(r, c);
-            return (
-              <div
-                key={`${r}-${c}`}
+      <div style={{ position: 'relative' }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${cfg.cols}, 1fr)`,
+          gap: 1,
+        }}>
+          {Array.from({ length: cfg.rows }, (_, r) =>
+            Array.from({ length: cfg.cols }, (_, c) => {
+              const valid = cfg.isValidCell(r, c);
+              return (
+                <div
+                  key={`${r}-${c}`}
+                  style={{
+                    aspectRatio: '1',
+                    borderRadius: 1,
+                    background: valid ? 'var(--code-bg)' : 'transparent',
+                    border: valid ? '1px solid var(--border)' : 'none',
+                  }}
+                />
+              );
+            }),
+          )}
+        </div>
+        {/* Furniture images, same placement math as the full room grid */}
+        {placed.map((p) => {
+          const { minR, maxR, minC, maxC } = getVisualBounds(p.item.shape);
+          const visualRows = maxR - minR + 1;
+          const visualCols = maxC - minC + 1;
+          const anchorAlign = getImageAlignment(p.item.shape);
+          const fillHeight = anchorAlign === 'top' || anchorAlign === 'bottom';
+          const src = p.item.image_url.startsWith('public/') ? p.item.image_url.slice(6) : p.item.image_url;
+          return (
+            <div
+              key={p.instanceId}
+              style={{
+                position: 'absolute',
+                left: `${((p.col + minC) / cfg.cols) * 100}%`,
+                top: `${((p.row + minR) / cfg.rows) * 100}%`,
+                width: `${(visualCols / cfg.cols) * 100}%`,
+                height: `${(visualRows / cfg.rows) * 100}%`,
+                display: 'flex',
+                alignItems: anchorAlign === 'bottom' ? 'flex-end' : anchorAlign === 'top' ? 'flex-start' : 'center',
+                justifyContent: 'center',
+                pointerEvents: 'none',
+              }}
+              title={p.item.name}
+            >
+              <img
+                src={src}
+                alt={p.item.name}
+                draggable={false}
                 style={{
-                  aspectRatio: '1',
-                  borderRadius: 1,
-                  background: !valid ? 'transparent' : cell ? CELL_COLORS[cell] : 'var(--code-bg)',
-                  border: valid ? '1px solid var(--border)' : 'none',
+                  height: '100%',
+                  width: fillHeight ? 'auto' : '100%',
+                  maxWidth: fillHeight ? 'none' : '100%',
+                  objectFit: fillHeight ? undefined : 'contain',
                 }}
               />
-            );
-          }),
-        )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

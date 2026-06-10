@@ -3,7 +3,7 @@ import type { CSSProperties, DragEvent } from 'react';
 import type { FurnitureItem, PlacedFurniture, RoomConfig } from '../types/furniture';
 import { getRoomConfig } from '../types/furniture';
 import { findAllAnchored, canPlaceGroup } from '../utils/anchorHelpers';
-import { buildOccupancy, buildAnchorPointSet, canPlace } from '../utils/gridHelpers';
+import { buildOccupancy, buildAnchorPointSet, canPlace, getVisualBounds, getImageAlignment } from '../utils/gridHelpers';
 
 function getTopAnchorOffset(shape: number[][]): number {
   let offset = 0;
@@ -38,6 +38,9 @@ interface Props {
   roomIndex?: number;
   /** itemId -> legend number; badges rendered when set. */
   labelNumbers?: Record<string, number> | null;
+  /** Item type currently hovered (grid or checklist); matching pieces glow. */
+  hoverItemId?: string | null;
+  onHoverItem?: (id: string | null) => void;
 }
 
 function buildShapeTypeGrid(placed: PlacedFurniture[], cfg: RoomConfig): (number | null)[][] {
@@ -62,48 +65,7 @@ function buildShapeTypeGrid(placed: PlacedFurniture[], cfg: RoomConfig): (number
   return grid;
 }
 
-function getVisualBounds(shape: number[][]): { minR: number; maxR: number; minC: number; maxC: number } {
-  let minR = shape.length;
-  let maxR = -1;
-  let minC = shape[0]?.length ?? 0;
-  let maxC = -1;
-  for (let r = 0; r < shape.length; r++) {
-    for (let c = 0; c < shape[r].length; c++) {
-      const t = shape[r][c];
-      if (t === 2 || t === 3 || t === 5) {
-        if (r < minR) minR = r;
-        if (r > maxR) maxR = r;
-        if (c < minC) minC = c;
-        if (c > maxC) maxC = c;
-      }
-    }
-  }
-  if (maxR === -1) {
-    minR = 0;
-    maxR = shape.length - 1;
-    minC = 0;
-    maxC = Math.max(...shape.map((row) => row.length)) - 1;
-  }
-  return { minR, maxR, minC, maxC };
-}
 
-function getImageAlignment(shape: number[][]): 'top' | 'bottom' | 'center' {
-  const vis = getVisualBounds(shape);
-
-  let topHasAnchorPoint = false;
-  if (vis.minR >= 0 && vis.minR < shape.length) {
-    topHasAnchorPoint = shape[vis.minR].some(c => c === 3);
-  }
-
-  let hasAnchorBelow = false;
-  for (let r = vis.maxR + 1; r < shape.length; r++) {
-    if (shape[r].some(c => c === 4)) { hasAnchorBelow = true; break; }
-  }
-
-  if (hasAnchorBelow) return 'bottom';
-  if (topHasAnchorPoint) return 'top';
-  return 'center';
-}
 
 type DragPayload =
   | { type: 'new'; item: FurnitureItem }
@@ -114,7 +76,7 @@ interface HoverInfo {
   valid: boolean;
 }
 
-export default function RoomGrid({ placed, onPlace, onRemove, onMove, expertView, roomIndex = 0, labelNumbers }: Props) {
+export default function RoomGrid({ placed, onPlace, onRemove, onMove, expertView, roomIndex = 0, labelNumbers, hoverItemId, onHoverItem }: Props) {
   const cfg = getRoomConfig(roomIndex);
   const { cols, rows } = cfg;
 
@@ -299,7 +261,7 @@ export default function RoomGrid({ placed, onPlace, onRemove, onMove, expertView
               left: `calc(${((p.col + minC) / cols) * 100}% + 2px)`,
               top: `calc(${((p.row + minR) / rows) * 100}% + 2px)`,
               zIndex: 4,
-              background: 'rgba(0,0,0,0.7)',
+              background: hoverItemId === p.item.id ? 'var(--accent)' : 'rgba(0,0,0,0.7)',
               color: '#fff',
               borderRadius: 4,
               fontSize: 10,
@@ -336,19 +298,23 @@ export default function RoomGrid({ placed, onPlace, onRemove, onMove, expertView
         const fillHeight = anchorAlign === 'top' || anchorAlign === 'bottom';
         const isDragging = draggingId === p.instanceId;
 
+        const isHovered = hoverItemId === p.item.id;
         return (
           <div
             key={p.instanceId}
+            data-piece-id={p.item.id}
             draggable
             onDragStart={(e) => handlePieceDragStart(e, p)}
             onDragEnd={handlePieceDragEnd}
+            onMouseEnter={() => onHoverItem?.(p.item.id)}
+            onMouseLeave={() => onHoverItem?.(null)}
             style={{
               position: 'absolute',
               left,
               top,
               width,
               height,
-              zIndex: 2,
+              zIndex: isHovered ? 3 : 2,
               cursor: 'grab',
               opacity: isDragging ? 0.3 : 1,
               transition: 'opacity 0.15s',
@@ -356,6 +322,10 @@ export default function RoomGrid({ placed, onPlace, onRemove, onMove, expertView
               display: 'flex',
               alignItems: anchorAlign === 'bottom' ? 'flex-end' : anchorAlign === 'top' ? 'flex-start' : 'center',
               justifyContent: 'center',
+              outline: isHovered ? '2px solid var(--accent)' : 'none',
+              outlineOffset: 1,
+              borderRadius: 4,
+              background: isHovered ? 'rgba(193,73,83,0.12)' : 'transparent',
             }}
             title={`${p.item.name} (drag to move, click to remove)`}
             onClick={() => onRemove(p.instanceId)}

@@ -316,3 +316,36 @@ converts bottom-left coords to shape-origin cells via visual bounds.
   the dialog's behavior — reload mirrors the full game state. Partial
   imports (e.g. keep generated layouts, refresh counts only) remain
   available through the import dialog's checkboxes.
+
+## Addendum (2026-06-10, #10): Placement-import settle pass
+
+Calibrated the layout import against a full-house screenshot of the real
+save (pixel-measured against the game's 43.3px wallpaper grid). Confirmed
+geometry: regular rooms are 7 rows, the attic is 8 (user-confirmed); the
+existing formulas (regular col = x+10 / bottom-solid row = −y−5, attic
+col = x+8 / row = −y−4) are correct for floor items, wall/ceiling items
+and anchored stacks alike. Two genuine discoveries:
+
+- **Wallmounted blocks are supporters.** `wallmounted_block1` is a single
+  anchor-point cell on the wall; standing items (bed, trash cans) anchor
+  on top of it mid-air. What looked like floating-item bugs was correct
+  data all along.
+- **Some records reference support the save doesn't encode.** In dense
+  builds a handful of standing items are saved with nothing beneath them
+  (their supporter is recorded elsewhere or nudged ±1 column; screenshot
+  comparison suggests the game renders front/back depth lanes with a
+  one-col/two-row projection offset we cannot read from the record — the
+  trailing 8 bytes are constant `01 01` for all 108 placements, so no
+  parent reference exists).
+
+Import now runs a **settle pass** (`src/utils/placementImport.ts`,
+extracted from App.tsx, unit-tested): standing items whose anchors have
+support in their own or an adjacent column stay where the save puts them;
+genuinely unsupported items slide straight down until their anchors land
+on another item or the floor; stacked items that would start above row 0
+are clamped into the room. Verified against the real save via Playwright:
+108/108 items imported, zero unsupported floaters (previously the main
+visual artifact), out-of-bounds cells 12 → 8. Residual imperfection: a few
+items in dense stacks sit one column off versus the in-game render
+(depth-lane projection, not recoverable from the save) — item identity,
+counts and rooms are always exact, so the checklist workflow is unaffected.

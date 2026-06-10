@@ -7,13 +7,19 @@ interface Props {
   rooms: PlacedFurniture[][];
   isRoomUnlocked: (i: number) => boolean;
   onSelectRoom: (i: number) => void;
+  labelNumbers?: Record<string, number> | null;
+  hoverItemId?: string | null;
+  onHoverItem?: (id: string | null) => void;
 }
 
-function MiniRoom({ roomIndex, placed, unlocked, onSelect }: {
+function MiniRoom({ roomIndex, placed, unlocked, onSelect, labelNumbers, hoverItemId, onHoverItem }: {
   roomIndex: number;
   placed: PlacedFurniture[];
   unlocked: boolean;
   onSelect: () => void;
+  labelNumbers?: Record<string, number> | null;
+  hoverItemId?: string | null;
+  onHoverItem?: (id: string | null) => void;
 }) {
   const cfg = getRoomConfig(roomIndex);
 
@@ -40,9 +46,11 @@ function MiniRoom({ roomIndex, placed, unlocked, onSelect }: {
     >
       <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-h)', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
         <span>{getRoomLabel(roomIndex)}</span>
-        <span style={{ color: 'var(--text-m)', fontWeight: 400 }}>
-          {unlocked ? `${placed.length} item${placed.length !== 1 ? 's' : ''}` : '🔒 locked'}
-        </span>
+        {unlocked && (
+          <span style={{ color: 'var(--text-m)', fontWeight: 400 }}>
+            {placed.length} item{placed.length !== 1 ? 's' : ''}
+          </span>
+        )}
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{
@@ -84,9 +92,13 @@ function MiniRoom({ roomIndex, placed, unlocked, onSelect }: {
           const anchorAlign = getImageAlignment(p.item.shape);
           const fillHeight = anchorAlign === 'top' || anchorAlign === 'bottom';
           const src = p.item.image_url.startsWith('public/') ? p.item.image_url.slice(6) : p.item.image_url;
+          const isHovered = hoverItemId === p.item.id;
           return (
             <div
               key={p.instanceId}
+              data-piece-id={p.item.id}
+              onMouseEnter={() => onHoverItem?.(p.item.id)}
+              onMouseLeave={() => onHoverItem?.(null)}
               style={{
                 position: 'absolute',
                 left: `${((p.col + minC) / cfg.cols) * 100}%`,
@@ -96,7 +108,9 @@ function MiniRoom({ roomIndex, placed, unlocked, onSelect }: {
                 display: 'flex',
                 alignItems: anchorAlign === 'bottom' ? 'flex-end' : anchorAlign === 'top' ? 'flex-start' : 'center',
                 justifyContent: 'center',
-                pointerEvents: 'none',
+                outline: isHovered ? '2px solid var(--accent)' : 'none',
+                borderRadius: 3,
+                background: isHovered ? 'rgba(193,73,83,0.12)' : 'transparent',
               }}
               title={p.item.name}
             >
@@ -111,9 +125,41 @@ function MiniRoom({ roomIndex, placed, unlocked, onSelect }: {
                   objectFit: fillHeight ? undefined : 'contain',
                 }}
               />
+              {labelNumbers?.[p.item.id] && (
+                <span style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  background: isHovered ? 'var(--accent)' : 'rgba(0,0,0,0.7)',
+                  color: '#fff',
+                  borderRadius: 3,
+                  fontSize: 8,
+                  fontWeight: 700,
+                  padding: '0 3px',
+                  lineHeight: '11px',
+                  pointerEvents: 'none',
+                }}>
+                  {labelNumbers[p.item.id]}
+                </span>
+              )}
             </div>
           );
         })}
+        {!unlocked && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 12,
+            fontWeight: 600,
+            color: 'var(--text-m)',
+            textAlign: 'center',
+          }}>
+            🔒 not yet unlocked in game
+          </div>
+        )}
       </div>
       </div>
     </div>
@@ -125,13 +171,16 @@ function MiniRoom({ roomIndex, placed, unlocked, onSelect }: {
  * Room 4 / Room 3 above Room 1 / Room 2 (matches the house image export).
  * Click a room to open it in the designer.
  */
-export default function HouseView({ rooms, isRoomUnlocked, onSelectRoom }: Props) {
+export default function HouseView({ rooms, isRoomUnlocked, onSelectRoom, labelNumbers, hoverItemId, onHoverItem }: Props) {
   const mini = (i: number) => (
     <MiniRoom
       roomIndex={i}
       placed={rooms[i]}
       unlocked={isRoomUnlocked(i)}
       onSelect={() => onSelectRoom(i)}
+      labelNumbers={labelNumbers}
+      hoverItemId={hoverItemId}
+      onHoverItem={onHoverItem}
     />
   );
 

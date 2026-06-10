@@ -393,7 +393,8 @@ export default function RoomDesignerWorkspace({
                         ...smallBtn,
                         fontSize: 11,
                         padding: '4px 8px',
-                        ...(presetKey === key ? { background: 'var(--accent-bg)', color: 'var(--accent)', borderColor: 'var(--accent)' } : {}),
+                        outline: 'none',
+                        ...(presetKey === key ? { background: 'var(--accent-bg)', color: 'var(--accent)', border: '1px solid var(--accent)' } : {}),
                       }}
                       onClick={() => applyPreset(key)}
                       title={FILL_PRESETS[key].description}
@@ -509,7 +510,14 @@ export default function RoomDesignerWorkspace({
       <div ref={linkRootRef} style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0, position: 'relative' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0, minWidth: 0 }}>
           {activeRoom === HOUSE_VIEW ? (
-            <HouseView rooms={rooms} isRoomUnlocked={isRoomUnlocked} onSelectRoom={onActiveRoomChange} />
+            <HouseView
+              rooms={rooms}
+              isRoomUnlocked={isRoomUnlocked}
+              onSelectRoom={onActiveRoomChange}
+              labelNumbers={labelNumbers}
+              hoverItemId={hoverItem}
+              onHoverItem={handleHoverItem}
+            />
           ) : (
             <RoomGrid
               placed={placed}

@@ -177,7 +177,7 @@ function App() {
   const [heroSeen, setHeroSeen] = useState(() => !!localStorage.getItem(HERO_SEEN_KEY));
   const [page, setPage] = useState(0);
   const [rooms, setRooms] = useState<PlacedFurniture[][]>(loadRooms);
-  const [activeRoom, setActiveRoom] = useState(ATTIC_INDEX);
+  const [activeRoom, setActiveRoom] = useState(HOUSE_VIEW);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [statsPerSpace, setStatsPerSpace] = useState(false);
   const [savefileName, setSavefileName] = useState<string | null>(null);
@@ -400,6 +400,7 @@ function App() {
         });
       }
       setRooms(newRooms);
+      setActiveRoom(HOUSE_VIEW);
     }
   }, []);
 

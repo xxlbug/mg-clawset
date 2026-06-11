@@ -79,12 +79,14 @@ interface Props {
   idols: FurnitureItem[];
   /** Owned food box item (null when none owned). */
   foodBox: FurnitureItem | null;
+  /** 0..1 while an auto-fill search runs, null when idle. */
+  fillProgress?: number | null;
 }
 
 export default function RoomDesignerWorkspace({
   visible, placed, rooms, activeRoom, onActiveRoomChange,
   onPlace, onRemove, onMove, onImportRooms, onAutoPopulate, ownership,
-  drawerOpen, onToggleDrawer, isRoomUnlocked, idols, foodBox,
+  drawerOpen, onToggleDrawer, isRoomUnlocked, idols, foodBox, fillProgress = null,
 }: Props) {
   const [expertView, setExpertView] = useState(false);
   const [autoFillOpen, setAutoFillOpen] = useState(false);
@@ -340,11 +342,27 @@ export default function RoomDesignerWorkspace({
               border: '1px solid var(--accent)',
               fontWeight: 600,
               padding: '6px 16px',
+              position: 'relative',
+              overflow: 'hidden',
+              cursor: fillProgress !== null ? 'progress' : 'pointer',
             }}
+            disabled={fillProgress !== null}
             onClick={() => setAutoFillOpen((v) => !v)}
             title="Automatically fill this room with owned furniture"
           >
-            ✨ Auto-fill {autoFillOpen ? '\u25b4' : '\u25be'}
+            {fillProgress !== null && (
+              <span style={{
+                position: 'absolute',
+                inset: 0,
+                width: `${Math.round(fillProgress * 100)}%`,
+                background: 'rgba(255,255,255,0.35)',
+                transition: 'width 120ms linear',
+                pointerEvents: 'none',
+              }} />
+            )}
+            {fillProgress !== null
+              ? `Optimizing\u2026 ${Math.round(fillProgress * 100)}%`
+              : <>✨ Auto-fill {autoFillOpen ? '\u25b4' : '\u25be'}</>}
           </button>
           <button
             style={{ ...smallBtn, ...(checklistOpen ? { background: 'var(--accent-bg)', color: 'var(--accent)' } : {}) }}
@@ -493,10 +511,10 @@ export default function RoomDesignerWorkspace({
                   style={{
                     ...smallBtn,
                     marginTop: 4,
-                    opacity: hasPositiveWeight ? 1 : 0.5,
-                    cursor: hasPositiveWeight ? 'pointer' : 'not-allowed',
+                    opacity: hasPositiveWeight && fillProgress === null ? 1 : 0.5,
+                    cursor: hasPositiveWeight && fillProgress === null ? 'pointer' : 'not-allowed',
                   }}
-                  disabled={!hasPositiveWeight}
+                  disabled={!hasPositiveWeight || fillProgress !== null}
                   onClick={handleAutoFill}
                   title={hasPositiveWeight ? `Fill ${getRoomLabel(activeRoom)}` : 'Set at least one stat to maximize'}
                 >

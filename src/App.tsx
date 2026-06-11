@@ -10,7 +10,7 @@ import SaveImportModal from './components/SaveImportModal';
 import AppHeader from './components/AppHeader';
 import WelcomeHero from './components/WelcomeHero';
 import { findAllAnchored, findAnchoredPieces, wouldCollide } from './utils/anchorHelpers';
-import { autoPopulateRoom } from './utils/autoPopulate';
+import { autoPopulateRoomAsync } from './utils/autoPopulate';
 import type { AlgorithmKey, StatWeights } from './utils/autoPopulate';
 import useIsMobile from './hooks/useIsMobile';
 import { parseSavegame } from './utils/savegame';
@@ -183,6 +183,8 @@ function App() {
   const [savefileName, setSavefileName] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
   const [houseInfo, setHouseInfo] = useState<HouseInfo | null>(loadHouseInfo);
+  // 0..1 while an auto-fill search runs, null when idle
+  const [fillProgress, setFillProgress] = useState<number | null>(null);
 
   const isRoomUnlocked = useCallback((i: number): boolean => {
     if (!houseInfo) return true; // unknown: assume everything available
@@ -289,7 +291,7 @@ function App() {
     [ownership],
   );
 
-  const handleAutoPopulate = useCallback((config: {
+  const handleAutoPopulate = useCallback(async (config: {
     weights: StatWeights;
     algorithm: AlgorithmKey;
     mustInclude: string[];
@@ -297,63 +299,73 @@ function App() {
   }) => {
     const { weights, algorithm, mustInclude, minStats } = config;
     const makeInstanceId = () => `placed-${nextInstanceId++}`;
+    // longer search budget is fine now that progress is visible
+    const budgetMs = algorithm === 'maximize' ? 1500 : undefined;
+    setFillProgress(0);
 
-    if (activeRoom === HOUSE_VIEW) {
-      // Fill the whole house: attic first (largest), then rooms in order.
-      // Locked rooms keep their content and their items stay reserved.
-      const fillOrder = [ATTIC_INDEX, 0, 1, 2, 3].filter(isRoomUnlocked);
-      const newRooms = rooms.map((room, i) => (fillOrder.includes(i) ? [] : [...room]));
-      const used: Record<string, number> = {};
-      for (const room of newRooms) {
-        for (const p of room) used[p.item.id] = (used[p.item.id] || 0) + 1;
+    try {
+      if (activeRoom === HOUSE_VIEW) {
+        // Fill the whole house: attic first (largest), then rooms in order.
+        // Locked rooms keep their content and their items stay reserved.
+        const fillOrder = [ATTIC_INDEX, 0, 1, 2, 3].filter(isRoomUnlocked);
+        const newRooms = rooms.map((room, i) => (fillOrder.includes(i) ? [] : [...room]));
+        const used: Record<string, number> = {};
+        for (const room of newRooms) {
+          for (const p of room) used[p.item.id] = (used[p.item.id] || 0) + 1;
+        }
+        let placedTotal = 0;
+        for (let fi = 0; fi < fillOrder.length; fi++) {
+          const ri = fillOrder[fi];
+          const result = await autoPopulateRoomAsync({
+            weights,
+            minStats,
+            algorithm,
+            budgetMs,
+            roomIndex: ri,
+            allFurniture,
+            ownership,
+            usedInOtherRooms: { ...used },
+            makeInstanceId,
+          }, (p) => setFillProgress((fi + p.fraction) / fillOrder.length));
+          newRooms[ri] = result;
+          placedTotal += result.length;
+          for (const p of result) used[p.item.id] = (used[p.item.id] || 0) + 1;
+        }
+        if (placedTotal === 0) {
+          window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
+          return;
+        }
+        setRooms(newRooms);
+        return;
       }
-      let placedTotal = 0;
-      for (const ri of fillOrder) {
-        const result = autoPopulateRoom({
-          weights,
-          minStats,
-          algorithm,
-          roomIndex: ri,
-          allFurniture,
-          ownership,
-          usedInOtherRooms: { ...used },
-          makeInstanceId,
-        });
-        newRooms[ri] = result;
-        placedTotal += result.length;
-        for (const p of result) used[p.item.id] = (used[p.item.id] || 0) + 1;
-      }
-      if (placedTotal === 0) {
+
+      const usedInOtherRooms: Record<string, number> = {};
+      rooms.forEach((room, i) => {
+        if (i === activeRoom) return;
+        for (const p of room) {
+          usedInOtherRooms[p.item.id] = (usedInOtherRooms[p.item.id] || 0) + 1;
+        }
+      });
+      const result = await autoPopulateRoomAsync({
+        weights,
+        minStats,
+        algorithm,
+        budgetMs,
+        roomIndex: activeRoom,
+        allFurniture,
+        ownership,
+        usedInOtherRooms,
+        makeInstanceId,
+        mustInclude,
+      }, (p) => setFillProgress(p.fraction));
+      if (result.length === 0) {
         window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
         return;
       }
-      setRooms(newRooms);
-      return;
+      setRooms(prev => prev.map((room, i) => (i === activeRoom ? result : room)));
+    } finally {
+      setFillProgress(null);
     }
-
-    const usedInOtherRooms: Record<string, number> = {};
-    rooms.forEach((room, i) => {
-      if (i === activeRoom) return;
-      for (const p of room) {
-        usedInOtherRooms[p.item.id] = (usedInOtherRooms[p.item.id] || 0) + 1;
-      }
-    });
-    const result = autoPopulateRoom({
-      weights,
-      minStats,
-      algorithm,
-      roomIndex: activeRoom,
-      allFurniture,
-      ownership,
-      usedInOtherRooms,
-      makeInstanceId,
-      mustInclude,
-    });
-    if (result.length === 0) {
-      window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
-      return;
-    }
-    setRooms(prev => prev.map((room, i) => (i === activeRoom ? result : room)));
   }, [rooms, activeRoom, ownership, isRoomUnlocked]);
 
   const handleSortChange = useCallback((field: SortField) => {
@@ -594,6 +606,7 @@ function App() {
             isRoomUnlocked={isRoomUnlocked}
             idols={ownedIdols}
             foodBox={foodBoxItem && (ownership[foodBoxItem.id] || 0) > 0 ? foodBoxItem : null}
+            fillProgress={fillProgress}
           />
         )}
         <div

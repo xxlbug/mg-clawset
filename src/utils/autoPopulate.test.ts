@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { FurnitureItem, PlacedFurniture, StatKey } from '../types/furniture';
 import { getRoomConfig, isAtticCellValid, ATTIC_INDEX } from '../types/furniture';
-import { statScore, autoPopulateRoom } from './autoPopulate';
+import { statScore, autoPopulateRoom, autoPopulateRoomAsync } from './autoPopulate';
 
 function makeItem(over: Partial<FurnitureItem> & { name: string }): FurnitureItem {
   const shape = over.shape ?? [[2]];
@@ -84,13 +84,21 @@ describe('autoPopulateRoom', () => {
     expect(result).toHaveLength(3);
   });
 
-  it('never places items with score <= 0 for the selected stats', () => {
-    const junk = makeItem({ name: 'junk', appeal: 5, shape: [[2]] }); // appeal not selected
+  it('never places items with negative score for the selected stats', () => {
+    const bad = makeItem({ name: 'bad', stimulation: 5, shape: [[2]] });
     const result = autoPopulateRoom(makeOpts({
-      allFurniture: [junk],
-      ownership: { junk: 10 },
+      weights: { comfort: 1, stimulation: -1 } as Partial<Record<StatKey, number>>,
+      allFurniture: [bad],
+      ownership: { bad: 10 },
     }));
     expect(result).toEqual([]);
+  });
+
+  it('uses neutral items as space fillers unless noFillers is set', () => {
+    const junk = makeItem({ name: 'junk', appeal: 5, shape: [[2]] }); // appeal not selected
+    const base = { allFurniture: [junk], ownership: { junk: 10 } };
+    expect(autoPopulateRoom(makeOpts(base))).toHaveLength(10);
+    expect(autoPopulateRoom(makeOpts({ ...base, noFillers: true }))).toEqual([]);
   });
 
   it('produces no overlaps and stays in bounds', () => {
@@ -133,6 +141,7 @@ describe('autoPopulateRoom', () => {
       weights: { comfort: 1 } as Partial<Record<StatKey, number>>,
       allFurniture: [stimToy, bed],
       ownership: { toy: 5, bed: 1 },
+      noFillers: true,
     }));
     expect(result).toHaveLength(1);
     expect(result[0].item.name).toBe('bed');
@@ -329,5 +338,53 @@ describe('autoPopulateRoom', () => {
       ownership: { hanging: 1, shelf: 1 },
     }));
     expect(withSupport.map(p => p.item.name).sort()).toEqual(['hanging', 'shelf']);
+  });
+
+  it('fillers never displace scoring items', () => {
+    // junk scores 0; sofa scores. Room must hold all sofas plus junk in gaps.
+    const sofa = makeItem({ name: 'sofa', comfort: 3, shape: [[2, 2]] });
+    const junk = makeItem({ name: 'junk', appeal: 1, shape: [[2]] });
+    const result = autoPopulateRoom(makeOpts({
+      weights: { comfort: 1 } as Partial<Record<StatKey, number>>,
+      allFurniture: [junk, sofa],
+      ownership: { junk: 500, sofa: 4 },
+    }));
+    expect(result.filter(p => p.item.name === 'sofa')).toHaveLength(4);
+    // gaps fully packed with junk: 16x7 room
+    const cells = result.reduce((s, p) => s + p.item.spacesOccupied, 0);
+    expect(cells).toBe(16 * 7);
+  });
+
+  it('maximize packs large scoring items alongside small ones', () => {
+    // 12 cells of 2x3 bookcases + small toys; bookcases beat toys per cell,
+    // so the best layout keeps both bookcases and packs toys in the gaps.
+    const bookcase = makeItem({ name: 'bookcase', comfort: 9, shape: [[2, 2], [2, 2], [2, 2]] });
+    const toy = makeItem({ name: 'toy', comfort: 1, shape: [[2]] });
+    const result = autoPopulateRoom(makeOpts({
+      weights: { comfort: 1 } as Partial<Record<StatKey, number>>,
+      allFurniture: [bookcase, toy],
+      ownership: { bookcase: 2, toy: 200 },
+      algorithm: 'maximize',
+      seed: 7,
+      iterations: 30,
+    }));
+    expect(result.filter(p => p.item.name === 'bookcase')).toHaveLength(2);
+    const cells = result.reduce((s, p) => s + p.item.spacesOccupied, 0);
+    expect(cells).toBe(16 * 7);
+  });
+
+  it('async variant reports progress and matches the sync contract', async () => {
+    const item = makeItem({ name: 'sofa', comfort: 5, shape: [[2]] });
+    const fractions: number[] = [];
+    const result = await autoPopulateRoomAsync(makeOpts({
+      allFurniture: [item],
+      ownership: { sofa: 3 },
+      algorithm: 'maximize',
+      seed: 1,
+      iterations: 5,
+    }), (p) => fractions.push(p.fraction));
+    expect(result).toHaveLength(3);
+    expect(fractions.at(-1)).toBe(1);
+    expect(fractions.every((f, i) => i === 0 || f >= fractions[i - 1])).toBe(true);
   });
 });

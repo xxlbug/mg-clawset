@@ -349,3 +349,27 @@ visual artifact), out-of-bounds cells 12 → 8. Residual imperfection: a few
 items in dense stacks sit one column off versus the in-game render
 (depth-lane projection, not recoverable from the save) — item identity,
 counts and rooms are always exact, so the checklist workflow is unaffected.
+
+## Addendum (2026-06-11, #11): Size-first packing, use-everything fill, progress UI
+
+Auto-fill now aims to use the whole collection, not just the densest scorers:
+
+- **Size-first rounds.** The maximize search alternates candidate orderings
+  between score-per-space ('efficiency') and large-pieces-first
+  ('sizeFirst'), so big furniture with relevant stats claims floor space
+  before trinkets plug the gaps it leaves. Ruin-and-recreate picks an
+  ordering at random per round.
+- **Use-everything phase.** After the scoring fill, leftover gaps are packed
+  with harmless owned items (weighted score 0, e.g. stats the user didn't
+  select), largest pieces first. Negative-score items are still never
+  placed. Opt out with `noFillers` (used by tests for the strict contract).
+- **Tie-breaking** prefers more cells used, then more pieces, at equal score.
+- **Async search with progress.** `autoPopulateRoomAsync` yields to the
+  event loop every ~40ms and reports `{fraction, bestScore, pieces}`. The
+  maximize budget rose 400ms → 1500ms per room; the Auto-fill button turns
+  into a live progress bar ("Optimizing… NN%", house fills aggregate across
+  rooms) and fill controls lock while the search runs.
+
+Verified against the real save (Playwright): whole-house Maximize fill packs
+Room 1 to 112/112 cells, Room 2 to 109/112, attic to 129/136, with live
+progress samples 5%→100%; locked rooms stay untouched. 31 unit tests pass.

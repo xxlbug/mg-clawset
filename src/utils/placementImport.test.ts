@@ -20,8 +20,9 @@ const box = mkItem('box', [[3, 3], [4, 4]]);          // 2-wide platform (Food B
 const trinket = mkItem('trinket', [[2], [4]]);        // 1x1 standing item
 const tallLamp = mkItem('lamp', [[2], [2], [2], [4]]); // 3-high floor item
 const wallPlate = mkItem('plate', [[2, 2], [2, 2]]);  // wallmounted, no anchors
+const hanger = mkItem('hanger', [[4], [5], [5], [2]]); // ceiling chain, solid 3 below anchor
 
-const byId = new Map([box, trinket, tallLamp, wallPlate].map((i) => [i.id, i]));
+const byId = new Map([box, trinket, tallLamp, wallPlate, hanger].map((i) => [i.id, i]));
 
 const pl = (itemId: string, col: number, row: number, order: number): SavedPlacement =>
   ({ itemId, roomIndex: 0, col, row, order });
@@ -89,6 +90,12 @@ describe('applyRoomPlacements', () => {
     ], byId);
     expect(out[0]).toMatchObject({ row: 6, col: 4 });   // box on the floor
     expect(out[1]).toMatchObject({ row: 5, col: 4 });   // trinket still on the box
+  });
+
+  it('clamps ceiling-hung items so the anchor sits on the ceiling', () => {
+    // record points the solid at row 0 -> naive mapping puts the anchor at -3
+    const out = applyRoomPlacements(0, [pl('hanger', 5, 0, 1)], byId);
+    expect(out[0].row).toBe(-1);   // anchor at -1 (ceiling), solid at row 2
   });
 
   it('relocates pieces whose record lands outside the attic shape', () => {

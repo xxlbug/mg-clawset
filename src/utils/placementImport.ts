@@ -82,6 +82,14 @@ export function applyRoomPlacements(
       }
     }
 
+    if (dir === 'above' && anchors.length > 0) {
+      // ceiling-hung items: the anchor can sit at most on the ceiling row
+      // (-1); records like the airfreshener (anchor 3 rows above its solid)
+      // would otherwise poke out of the top of the room
+      const minAnchorR = Math.min(...anchors.map(([r]) => r));
+      if (row0 + minAnchorR < -1) row0 = -1 - minAnchorR;
+    }
+
     if (dir === 'below') {
       // keep stacked items above the room (negative rows) inside the grid
       if (row0 + minR < 0) row0 = -minR;

@@ -413,3 +413,16 @@ toggles in house view, locked rooms preserved. 31 unit tests pass.
   preset buttons.
 - First load defaults to a different preset per room (cycling Breeding →
   Storage → Mutation in room order) instead of all-Breeding.
+
+## Addendum (2026-06-11, #14): Per-room custom weights, checklist/hover split
+
+- Rooms set to "Custom" in the house fill now carry their own tri-state
+  stat weights (chips rendered under that room's row), so several custom
+  rooms can optimize different stats. The Fill button stays disabled until
+  every custom room has at least one maximized stat.
+- Checklist and hover are now separate concerns: hovering a placed piece
+  shows a lightweight name tag ("#42 Lotion ×2") next to the piece instead
+  of auto-opening the checklist panel (which caused a layout shift on every
+  mouse-over). The checklist opens only via its button; connector lines
+  remain checklist-only. The tag is clamped inside the view for edge
+  pieces.

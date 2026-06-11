@@ -90,6 +90,8 @@ export default function RoomDesignerWorkspace({
   const [presetKey, setPresetKey] = useState<FillPresetKey | 'custom'>('breeding');
   // house fill: independent preset per room
   const [roomPresets, setRoomPresets] = useState<Record<number, FillPresetKey | 'custom' | 'skip'>>({});
+  // per-room stat weights for rooms set to 'custom' in the house fill
+  const [roomWeights, setRoomWeights] = useState<Record<number, Record<StatKey, -1 | 0 | 1>>>({});
   const [statWeights, setStatWeights] = useState<Record<StatKey, -1 | 0 | 1>>(
     () => ({ ...EMPTY_WEIGHTS, ...FILL_PRESETS.breeding.tristate }),
   );
@@ -99,6 +101,8 @@ export default function RoomDesignerWorkspace({
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [hoverItem, setHoverItem] = useState<string | null>(null);
   const [connectorLines, setConnectorLines] = useState<{ x1: number; y1: number; x2: number; y2: number }[]>([]);
+  // lightweight hover overlay (item name tag) when the checklist panel is closed
+  const [hoverTip, setHoverTip] = useState<{ x: number; y: number; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const linkRootRef = useRef<HTMLDivElement>(null);
 
@@ -135,6 +139,8 @@ export default function RoomDesignerWorkspace({
     return () => cancelAnimationFrame(id);
   }, [hoverItem, checklistOpen, placed]);
 
+
+
   // Legend numbers: alphabetical unique items of the active room (matches checklist order)
   const labelNumbers = useMemo(() => {
     const ids = [...new Map(placed.map((p) => [p.item.id, p.item.name])).entries()]
@@ -145,10 +151,41 @@ export default function RoomDesignerWorkspace({
     return map;
   }, [placed]);
 
-  // Hovering a placed item needs the checklist as its legend
+    // Hover tag: name + label number next to the hovered piece (checklist closed)
+  useLayoutEffect(() => {
+    const root = linkRootRef.current;
+    if (!hoverItem || checklistOpen || !root) {
+      setHoverTip(null);
+      return;
+    }
+    const piece = root.querySelector(`[data-piece-id="${CSS.escape(hoverItem)}"]`);
+    if (!piece) {
+      setHoverTip(null);
+      return;
+    }
+    const rootRect = root.getBoundingClientRect();
+    const r = piece.getBoundingClientRect();
+    let name = '';
+    let count = 0;
+    for (const room of rooms) {
+      for (const pl of room) {
+        if (pl.item.id === hoverItem) {
+          name = pl.item.name;
+          count++;
+        }
+      }
+    }
+    const num = labelNumbers[hoverItem];
+    setHoverTip({
+      // keep the tag inside the container even for pieces at the edges
+      x: Math.min(Math.max(r.left + r.width / 2 - rootRect.left, 70), rootRect.width - 70),
+      y: Math.max(r.top - rootRect.top, 30),
+      text: `${num ? `#${num} ` : ''}${name}${count > 1 ? ` \u00d7${count}` : ''}`,
+    });
+  }, [hoverItem, checklistOpen, rooms, labelNumbers]);
+
   const handleHoverItem = (id: string | null) => {
     setHoverItem(id);
-    if (id && !checklistOpen) setChecklistOpen(true);
   };
 
   const applyPreset = (key: FillPresetKey) => {
@@ -189,11 +226,18 @@ export default function RoomDesignerWorkspace({
   const PRESET_CYCLE: FillPresetKey[] = ['breeding', 'storage', 'mutation'];
   const roomChoice = (ri: number) =>
     roomPresets[ri] ?? PRESET_CYCLE[Math.max(0, unlockedRooms.indexOf(ri)) % PRESET_CYCLE.length];
-  const houseUsesCustom = activeRoom === HOUSE_VIEW
-    && unlockedRooms.some((ri) => roomChoice(ri) === 'custom');
+  const roomWeightsFor = (ri: number): Record<StatKey, -1 | 0 | 1> =>
+    roomWeights[ri] ?? EMPTY_WEIGHTS;
+  const cycleRoomStat = (ri: number, stat: StatKey) => {
+    setRoomWeights((prev) => {
+      const cur = prev[ri] ?? EMPTY_WEIGHTS;
+      return { ...prev, [ri]: { ...cur, [stat]: cur[stat] === 0 ? 1 : cur[stat] === 1 ? -1 : 0 } };
+    });
+  };
   // custom rooms need at least one maximized stat; presets always have one
   const fillReady = activeRoom === HOUSE_VIEW
-    ? unlockedRooms.some((ri) => roomChoice(ri) !== 'skip') && (!houseUsesCustom || hasPositiveWeight)
+    ? unlockedRooms.some((ri) => roomChoice(ri) !== 'skip')
+      && unlockedRooms.every((ri) => roomChoice(ri) !== 'custom' || ALL_STATS.some((st) => roomWeightsFor(ri)[st] > 0))
     : hasPositiveWeight;
 
   const buildHousePlans = (): RoomFillPlan[] => {
@@ -202,7 +246,11 @@ export default function RoomDesignerWorkspace({
       const choice = roomChoice(ri);
       if (choice === 'skip') continue;
       if (choice === 'custom') {
-        plans.push({ roomIndex: ri, weights: activeWeights, mustInclude: [] });
+        const w = roomWeightsFor(ri);
+        const weights: StatWeights = Object.fromEntries(
+          ALL_STATS.filter((st) => w[st] !== 0).map((st) => [st, w[st]]),
+        );
+        plans.push({ roomIndex: ri, weights, mustInclude: [] });
         continue;
       }
       const preset = FILL_PRESETS[choice];
@@ -252,13 +300,13 @@ export default function RoomDesignerWorkspace({
     });
   };
 
-  const statChips = (
+  const renderStatChips = (weights: Record<StatKey, -1 | 0 | 1>, onCycle: (stat: StatKey) => void) => (
     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
       <span style={{ fontSize: 11, color: 'var(--text-m)' }} title="Click a stat to cycle: maximize \u2192 avoid \u2192 off">Stats:</span>
       {ALL_STATS.map((stat) => (
         <button
           key={stat}
-          onClick={() => cycleStat(stat)}
+          onClick={() => onCycle(stat)}
           title={`${STAT_LABELS[stat]} \u2014 click to cycle: maximize \u2192 avoid \u2192 off`}
           style={{
             display: 'inline-flex',
@@ -270,18 +318,19 @@ export default function RoomDesignerWorkspace({
             fontSize: 12,
             fontWeight: 600,
             cursor: 'pointer',
-            border: `1px solid ${statWeights[stat] !== 0 ? 'var(--accent)' : 'var(--border)'}`,
-            background: statWeights[stat] === 1 ? 'var(--accent)' : statWeights[stat] === -1 ? 'var(--charcoal)' : 'var(--bg)',
-            color: statWeights[stat] !== 0 ? '#fff' : 'var(--text-m)',
+            border: `1px solid ${weights[stat] !== 0 ? 'var(--accent)' : 'var(--border)'}`,
+            background: weights[stat] === 1 ? 'var(--accent)' : weights[stat] === -1 ? 'var(--charcoal)' : 'var(--bg)',
+            color: weights[stat] !== 0 ? '#fff' : 'var(--text-m)',
           }}
         >
           <StatIcon stat={stat} size={13} />
           {STAT_LABELS[stat]}
-          {statWeights[stat] === 1 ? ' +' : statWeights[stat] === -1 ? ' \u2212' : ''}
+          {weights[stat] === 1 ? ' +' : weights[stat] === -1 ? ' \u2212' : ''}
         </button>
       ))}
     </div>
   );
+  const statChips = renderStatChips(statWeights, cycleStat);
 
   const IDOL_NOTES: Record<string, string> = {
     suppressoridol: 'Cats will NOT breed in this room',
@@ -462,7 +511,7 @@ export default function RoomDesignerWorkspace({
                 {unlockedRooms.map((ri) => {
                   const choice = roomChoice(ri);
                   const desc = choice === 'custom'
-                    ? 'Uses the stat toggles below'
+                    ? 'Pick this room\u2019s own stats:'
                     : choice === 'skip'
                       ? 'Keeps the current layout untouched'
                       : FILL_PRESETS[choice].description;
@@ -490,11 +539,15 @@ export default function RoomDesignerWorkspace({
                         <option value="skip">Skip (keep as is)</option>
                       </select>
                       <span style={{ fontSize: 11, color: 'var(--text-m)', minWidth: 0 }}>{desc}</span>
+                      {choice === 'custom' && (
+                        <div style={{ flexBasis: '100%', paddingLeft: 60 }}>
+                          {renderStatChips(roomWeightsFor(ri), (stat) => cycleRoomStat(ri, stat))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
-              {houseUsesCustom && statChips}
             </>
           ) : (
             <>
@@ -610,6 +663,27 @@ export default function RoomDesignerWorkspace({
             hoverItemId={hoverItem}
             onHoverItem={handleHoverItem}
           />
+        )}
+        {hoverTip && (
+          <div style={{
+            position: 'absolute',
+            left: hoverTip.x,
+            top: hoverTip.y - 8,
+            transform: 'translate(-50%, -100%)',
+            background: 'var(--charcoal)',
+            color: '#fff',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: 'var(--font)',
+            padding: '4px 10px',
+            borderRadius: 8,
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+            zIndex: 40,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
+          }}>
+            {hoverTip.text}
+          </div>
         )}
         {connectorLines.length > 0 && (
           <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 30 }}>

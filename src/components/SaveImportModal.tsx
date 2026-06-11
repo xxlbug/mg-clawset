@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import type { CSSProperties } from 'react';
-import initSqlJs from 'sql.js';
-import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
+import { parseSavegame } from '../utils/savegame';
+import type { HouseInfo, SavedPlacement } from '../utils/savegame';
 
 const overlay: CSSProperties = {
   position: 'fixed',
@@ -99,31 +99,20 @@ const statusText: CSSProperties = {
   minHeight: 18,
 };
 
-function parseFurnitureBlob(uint8Array: Uint8Array): { furniture_name: string; quality: number } {
-  const view = new DataView(uint8Array.buffer, uint8Array.byteOffset, uint8Array.byteLength);
-  const decoder = new TextDecoder('utf-8');
-  let off = 0;
-  off += 4; // field1
-  const name_len = view.getInt32(off, true);
-  off += 4;
-  off += 4; // padding
-  const nameBytes = uint8Array.slice(off, off + name_len);
-  const furniture_name = decoder.decode(nameBytes);
-  off += name_len;
-  // Quality/rarity field sits right after the name string (0 = normal, 2 = rare)
-  const quality = view.getInt32(off, true);
-  return { furniture_name, quality };
-}
-
 interface Props {
   open: boolean;
   onClose: () => void;
-  onImport: (ownership: Record<string, number>) => void;
+  onImport: (ownership: Record<string, number> | null, houseInfo: HouseInfo | null, placements: SavedPlacement[] | null) => void;
   furnitureIdMap: Map<string, string>; // lowercase name -> id
+  /** Called when the file was picked via the File System Access API (Chromium) so the handle can be remembered. */
+  onHandleCaptured?: (handle: FileSystemFileHandle) => void;
 }
 
-export default function SaveImportModal({ open, onClose, onImport, furnitureIdMap }: Props) {
+export default function SaveImportModal({ open, onClose, onImport, furnitureIdMap, onHandleCaptured }: Props) {
   const [file, setFile] = useState<File | null>(null);
+  const [importItems, setImportItems] = useState(true);
+  const [importUnlocks, setImportUnlocks] = useState(true);
+  const [importLayouts, setImportLayouts] = useState(true);
   const [status, setStatus] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
@@ -141,61 +130,13 @@ export default function SaveImportModal({ open, onClose, onImport, furnitureIdMa
       const arrayBuffer = await file.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
 
-      setStatus('Initializing database parser...');
-      const SQL = await initSqlJs({
-        locateFile: () => sqlWasmUrl,
-      });
-
-      const db = new SQL.Database(uint8Array);
-
       setStatus('Parsing furniture data...');
-      const stmt = db.prepare('SELECT key, data FROM furniture');
-      const itemCounts: { name: string; quality: number }[] = [];
+      const { ownership: newOwnership, matched, unmatchedNames, houseInfo, placements } = await parseSavegame(uint8Array, furnitureIdMap);
 
-      while (stmt.step()) {
-        const row = stmt.getAsObject();
-        const blobData = row.data as Uint8Array;
-        try {
-          const parsed = parseFurnitureBlob(blobData);
-          itemCounts.push({ name: parsed.furniture_name, quality: parsed.quality });
-        } catch {
-          // skip unparseable rows
-        }
-      }
-      stmt.free();
-      db.close();
+      console.log('[SaveImport] Matched:', matched, 'Unmatched:', unmatchedNames, 'House:', houseInfo, 'Placed:', placements.length);
 
-      // Aggregate counts per resolved name (base name or rare variant)
-      const nameCounts: Record<string, number> = {};
-      for (const { name, quality } of itemCounts) {
-        // quality 0 = normal, 2 = rare
-        const resolvedName = quality >= 2 ? `${name}_(Rare)` : name;
-        nameCounts[resolvedName] = (nameCounts[resolvedName] || 0) + 1;
-      }
-
-      // Map save file names to app IDs
-      const newOwnership: Record<string, number> = {};
-      let matched = 0;
-      const unmatchedNames: string[] = [];
-
-      for (const [name, count] of Object.entries(nameCounts)) {
-        const id = furnitureIdMap.get(name.toLowerCase());
-        if (id) {
-          newOwnership[id] = (newOwnership[id] || 0) + count;
-          matched++;
-        } else {
-          unmatchedNames.push(name);
-        }
-      }
-
-      console.log('[SaveImport] Parsed items from save:', itemCounts.length, '| Unique names:', Object.keys(nameCounts).length);
-      console.log('[SaveImport] Rare items found:', itemCounts.filter(i => i.quality > 1).length);
-      console.log('[SaveImport] Sample map keys:', [...furnitureIdMap.keys()].slice(0, 10));
-      console.log('[SaveImport] Matched:', matched, 'Unmatched:', unmatchedNames);
-      console.log('[SaveImport] New ownership:', newOwnership);
-
-      setStatus(`Found ${matched} furniture types (${unmatchedNames.length} unmatched). Importing...`);
-      onImport(newOwnership);
+      setStatus(`Found ${matched} furniture types (${unmatchedNames.length} unmatched, ${placements.length} placed in rooms). Importing...`);
+      onImport(importItems ? newOwnership : null, importUnlocks ? houseInfo : null, importLayouts ? placements : null);
 
       setTimeout(() => {
         setStatus('');
@@ -228,6 +169,21 @@ export default function SaveImportModal({ open, onClose, onImport, furnitureIdMa
           Look for files with the <strong>.sav</strong> extension in the saves folder.
         </p>
 
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text)', margin: '8px 0' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input type="checkbox" checked={importItems} onChange={(e) => setImportItems(e.target.checked)} />
+            Owned furniture counts
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input type="checkbox" checked={importUnlocks} onChange={(e) => setImportUnlocks(e.target.checked)} />
+            Unlocked rooms
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} title="Replaces the rooms in this tool with what is currently placed in your game">
+            <input type="checkbox" checked={importLayouts} onChange={(e) => setImportLayouts(e.target.checked)} />
+            Current room layouts
+          </label>
+        </div>
+
         <div style={warningBox}>
           ⚠ This will overwrite your current inventory data. Any manually added counts will be replaced.
         </div>
@@ -248,9 +204,39 @@ export default function SaveImportModal({ open, onClose, onImport, furnitureIdMa
         <label
           style={fileLabel}
           onClick={() => fileRef.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={async (e) => {
+            e.preventDefault();
+            const item = e.dataTransfer.items?.[0];
+            // Drag-and-drop hands out handles even for %APPDATA% files,
+            // which the showOpenFilePicker blocklist refuses.
+            if (item?.getAsFileSystemHandle) {
+              try {
+                const handle = await item.getAsFileSystemHandle();
+                if (handle && handle.kind === 'file') {
+                  const fh = handle as FileSystemFileHandle;
+                  setFile(await fh.getFile());
+                  setError('');
+                  setStatus('');
+                  onHandleCaptured?.(fh);
+                  return;
+                }
+              } catch { /* fall through to plain File */ }
+            }
+            const f = e.dataTransfer.files?.[0] ?? null;
+            if (f) {
+              setFile(f);
+              setError('');
+              setStatus('');
+            }
+          }}
         >
-          {file ? `📁 ${file.name}` : 'Click to select .sav file'}
+          {file ? `📁 ${file.name}` : 'Click to select your .sav file — or drag it here'}
         </label>
+
+        <p style={{ ...paragraph, fontSize: 11, color: 'var(--text-m)', marginTop: 6 }}>
+          Tip: drag the file here to enable one-click “Re-load savegame” later (Chrome/Edge).
+        </p>
 
         {status && <div style={{ ...statusText, color: 'var(--text)' }}>{status}</div>}
         {error && <div style={{ ...statusText, color: 'var(--blushed-brick)' }}>{error}</div>}
@@ -275,7 +261,7 @@ export default function SaveImportModal({ open, onClose, onImport, furnitureIdMa
               opacity: file && !loading ? 1 : 0.5,
               cursor: file && !loading ? 'pointer' : 'not-allowed',
             }}
-            disabled={!file || loading}
+            disabled={!file || loading || (!importItems && !importUnlocks && !importLayouts)}
             onClick={handleImport}
           >
             {loading ? 'Importing...' : 'Import'}

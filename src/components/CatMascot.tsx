@@ -22,7 +22,7 @@ function detectAdblock(): Promise<boolean> {
   });
 }
 
-const CatSVG = ({ size }: { size: number }) => (
+export const CatSVG = ({ size }: { size: number }) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" style={{ width: size, height: size, flexShrink: 0, filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.5))', cursor: 'pointer' }}>
     <polygon points="15,20 85,20 75,0 25,0" fill="#C28F5A" />
     <polygon points="15,20 85,20 85,50 15,50" fill="#8C6239" />
@@ -149,13 +149,16 @@ const bubbleStyle = (visible: boolean): CSSProperties => ({
   pointerEvents: visible ? 'auto' : 'none',
 });
 
+const WELCOME_SEEN_KEY = 'mg-clawset-welcome-seen';
+
 interface Props {
   compact?: boolean;
   isMobile?: boolean;
+  onLoadSavegame?: () => void;
 }
 
-export default function CatMascot({ compact, isMobile }: Props) {
-  const [helpOpen, setHelpOpen] = useState(true);
+export default function CatMascot({ compact, isMobile, onLoadSavegame }: Props) {
+  const [helpOpen, setHelpOpen] = useState(() => (isMobile ? !localStorage.getItem(WELCOME_SEEN_KEY) : false));
   const [helpVisible, setHelpVisible] = useState(false); // for animation
   const [helpDismissed, setHelpDismissed] = useState(false);
   const [adblockBubble, setAdblockBubble] = useState(false);
@@ -168,7 +171,7 @@ export default function CatMascot({ compact, isMobile }: Props) {
   }, []);
 
   // Animate help panel in/out
-  const [helpMounted, setHelpMounted] = useState(true); // DOM presence
+  const [helpMounted, setHelpMounted] = useState(helpOpen); // DOM presence
   useEffect(() => {
     if (helpOpen) {
       setHelpMounted(true);
@@ -193,6 +196,7 @@ export default function CatMascot({ compact, isMobile }: Props) {
   const dismissHelp = useCallback(() => {
     setHelpOpen(false);
     setHelpDismissed(true);
+    localStorage.setItem(WELCOME_SEEN_KEY, '1');
   }, []);
 
   const openHelp = useCallback((e: React.MouseEvent) => {
@@ -350,25 +354,43 @@ export default function CatMascot({ compact, isMobile }: Props) {
               </div>
             </div>
 
-            <div
-              style={{
-                marginTop: 4,
-                padding: '8px 24px',
-                borderRadius: 8,
-                background: 'var(--accent-bg)',
-                color: 'var(--accent)',
-                fontWeight: 500,
-                fontSize: 13,
-                cursor: 'pointer',
-                border: '1px solid var(--border)',
-              }}
-              onClick={dismissHelp}
-            >
-              Got it, let me browse!
+            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+              {!isMobile && onLoadSavegame && (
+                <div
+                  style={{
+                    padding: '8px 24px',
+                    borderRadius: 8,
+                    background: 'var(--accent)',
+                    color: 'var(--bg)',
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    border: '1px solid var(--accent)',
+                  }}
+                  onClick={() => { dismissHelp(); onLoadSavegame(); }}
+                >
+                  📂 Load savegame
+                </div>
+              )}
+              <div
+                style={{
+                  padding: '8px 24px',
+                  borderRadius: 8,
+                  background: 'var(--accent-bg)',
+                  color: 'var(--accent)',
+                  fontWeight: 500,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  border: '1px solid var(--border)',
+                }}
+                onClick={dismissHelp}
+              >
+                Got it, let me browse!
+              </div>
             </div>
 
             <div style={{ fontSize: 11, color: 'var(--text-m)' }}>
-              Click anywhere outside or the button to close. Click the cat anytime to reopen.
+              Shown once — click the cat anytime to reopen this help.
             </div>
           </div>
         </div>,

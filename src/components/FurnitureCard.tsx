@@ -3,6 +3,7 @@ import type { FurnitureItem } from '../types/furniture';
 import FurnitureImage from './FurnitureImage';
 import ShapeVisualizer from './ShapeVisualizer';
 import StatDisplay from './StatDisplay';
+import { STAT_COLORS } from '../utils/statColors';
 import OwnershipCounter from './OwnershipCounter';
 
 const GRID_FULL = '56px 48px minmax(120px, 1fr) repeat(5, 60px) 90px';
@@ -59,11 +60,11 @@ export default function FurnitureCard({ item, owned, onIncrement, onDecrement, c
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ ...nameStyle, fontSize: 13, marginBottom: 4 }} title={item.name}>{item.name}</div>
           <div style={{ display: 'flex', gap: 8, fontSize: 11, color: 'var(--text)', flexWrap: 'wrap' }}>
-            <span>A:{apl}</span>
-            <span>C:{cmf}</span>
-            <span>S:{stm}</span>
-            <span>H:{hlt}</span>
-            <span>M:{mut}</span>
+            <span style={{ color: STAT_COLORS.appeal }}>A:{apl}</span>
+            <span style={{ color: STAT_COLORS.comfort }}>C:{cmf}</span>
+            <span style={{ color: STAT_COLORS.stimulation }}>S:{stm}</span>
+            <span style={{ color: STAT_COLORS.health }}>H:{hlt}</span>
+            <span style={{ color: STAT_COLORS.mutation }}>M:{mut}</span>
           </div>
         </div>
         <OwnershipCounter count={owned} onIncrement={onIncrement} onDecrement={onDecrement} compact />
@@ -79,11 +80,11 @@ export default function FurnitureCard({ item, owned, onIncrement, onDecrement, c
       <FurnitureImage src={item.image_url} alt={item.name} compact={compact} draggableItem={item} />
       <ShapeVisualizer shape={item.shape} compact={compact} />
       <div style={nameStyle} title={item.name}>{item.name}</div>
-      <StatDisplay value={apl} compact={compact} />
-      <StatDisplay value={cmf} compact={compact} />
-      <StatDisplay value={stm} compact={compact} />
-      <StatDisplay value={hlt} compact={compact} />
-      <StatDisplay value={mut} compact={compact} />
+      <StatDisplay value={apl} compact={compact} stat="appeal" />
+      <StatDisplay value={cmf} compact={compact} stat="comfort" />
+      <StatDisplay value={stm} compact={compact} stat="stimulation" />
+      <StatDisplay value={hlt} compact={compact} stat="health" />
+      <StatDisplay value={mut} compact={compact} stat="mutation" />
       <OwnershipCounter count={owned} onIncrement={onIncrement} onDecrement={onDecrement} compact={compact} />
       {showRem && (
         <div style={{

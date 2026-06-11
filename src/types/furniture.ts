@@ -70,6 +70,9 @@ export interface RoomConfig {
   rows: number;
   isValidCell: (row: number, col: number) => boolean;
   hasTopAnchors: boolean;
+  /** Anchorless (wallmounted) items need something beneath them — the attic
+   * slope has no back wall to hang things on. */
+  looseItemsNeedSupport: boolean;
 }
 
 const REGULAR_CONFIG: RoomConfig = {
@@ -77,6 +80,7 @@ const REGULAR_CONFIG: RoomConfig = {
   rows: ROOM_ROWS,
   isValidCell: (r, c) => r >= 0 && r < ROOM_ROWS && c >= 0 && c < ROOM_COLS,
   hasTopAnchors: true,
+  looseItemsNeedSupport: false,
 };
 
 const ATTIC_CONFIG: RoomConfig = {
@@ -84,12 +88,17 @@ const ATTIC_CONFIG: RoomConfig = {
   rows: ATTIC_ROWS,
   isValidCell: isAtticCellValid,
   hasTopAnchors: false,
+  looseItemsNeedSupport: true,
 };
 
 export function getRoomConfig(roomIndex: number): RoomConfig {
   return roomIndex === ATTIC_INDEX ? ATTIC_CONFIG : REGULAR_CONFIG;
 }
 
+/** Pseudo room index for the whole-house overview. */
+export const HOUSE_VIEW = -1;
+
 export function getRoomLabel(roomIndex: number): string {
+  if (roomIndex === HOUSE_VIEW) return 'House';
   return roomIndex === ATTIC_INDEX ? 'Attic' : `Room ${roomIndex + 1}`;
 }

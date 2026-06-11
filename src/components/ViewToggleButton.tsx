@@ -3,14 +3,14 @@ import type { CSSProperties } from 'react';
 const styles: Record<string, CSSProperties> = {
   button: {
     position: 'absolute',
-    right: -20,
+    left: -20,
     top: '50%',
     transform: 'translateY(-50%)',
     width: 20,
     height: 60,
-    borderRadius: '0 8px 8px 0',
+    borderRadius: '8px 0 0 8px',
     border: '1px solid var(--border)',
-    borderLeft: 'none',
+    borderRight: 'none',
     background: 'var(--code-bg)',
     color: 'var(--text)',
     cursor: 'pointer',
@@ -34,7 +34,7 @@ export default function ViewToggleButton({ expanded, onClick }: Props) {
     <button
       style={styles.button}
       onClick={onClick}
-      title={expanded ? 'Collapse to full list' : 'Open room designer'}
+      title={expanded ? 'Hide furniture list' : 'Show furniture list'}
     >
       {expanded ? '▶' : '◀'}
     </button>

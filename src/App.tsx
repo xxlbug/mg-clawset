@@ -1,14 +1,23 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import type { Filters, SortConfig, SortField, FurnitureItem, RawFurnitureItem, PlacedFurniture } from './types/furniture';
-import { getRoomConfig } from './types/furniture';
+import { getRoomConfig, ATTIC_INDEX, HOUSE_VIEW } from './types/furniture';
 import furnitureData from './data/furniture_data.json';
 import SplitScreenContainer from './components/SplitScreenContainer';
 import FurnitureBrowser from './components/FurnitureBrowser';
 import RoomDesignerWorkspace from './components/RoomDesignerWorkspace';
 import SaveImportModal from './components/SaveImportModal';
+import AppHeader from './components/AppHeader';
+import WelcomeHero from './components/WelcomeHero';
 import { findAllAnchored, findAnchoredPieces, wouldCollide } from './utils/anchorHelpers';
+import { autoPopulateRoomAsync, statScore } from './utils/autoPopulate';
+import type { AlgorithmKey, RoomFillPlan } from './utils/autoPopulate';
+import type { AppView } from './components/AppHeader';
 import useIsMobile from './hooks/useIsMobile';
+import { parseSavegame } from './utils/savegame';
+import type { HouseInfo, SavedPlacement } from './utils/savegame';
+import { saveSavefileHandle, loadSavefileHandle, readRememberedSavefile } from './utils/savefileHandle';
+import { applyRoomPlacements } from './utils/placementImport';
 
 function countSpaces(shape: number[][]): number {
   let count = 0;
@@ -56,6 +65,22 @@ for (const item of allFurniture) {
       furnitureIdMap.set(internalKey, item.id);
     }
   }
+}
+
+const HERO_SEEN_KEY = 'mg-clawset-hero-seen';
+
+// Special idols (wiki: "Special Furniture") — unique effects beyond raw stats
+const IDOL_RE = /special_\w*(idol)/i;
+const idolItems = allFurniture.filter((it) => IDOL_RE.test(it.image_url));
+const foodBoxItem = allFurniture.find((it) => it.image_url.includes('special_foodbox')) ?? null;
+const HOUSE_UNLOCKS_KEY = 'mg-clawset-house-unlocks';
+
+function loadHouseInfo(): HouseInfo | null {
+  try {
+    const raw = localStorage.getItem(HOUSE_UNLOCKS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return null;
 }
 
 const defaultFilters: Filters = {
@@ -142,22 +167,46 @@ const layoutStyles: Record<string, CSSProperties> = {
 
 function App() {
   const isMobile = useIsMobile();
-  const [filters, setFilters] = useState<Filters>(defaultFilters);
-  const [sort, setSort] = useState<SortConfig>(defaultSort);
   const [ownership, setOwnership] = useState<Record<string, number>>(loadOwnership);
-  const [expanded, setExpanded] = useState(false);
+  const hasOwnership = Object.keys(ownership).length > 0;
+  const [filters, setFilters] = useState<Filters>(
+    () => ({ ...defaultFilters, onlyOwned: Object.keys(loadOwnership()).length > 0 }),
+  );
+  const [sort, setSort] = useState<SortConfig>(defaultSort);
+  // Drawer starts open only for users without a collection (theorycrafting)
+  const [drawerOpen, setDrawerOpen] = useState(() => Object.keys(loadOwnership()).length === 0);
+  const [heroSeen, setHeroSeen] = useState(() => !!localStorage.getItem(HERO_SEEN_KEY));
   const [page, setPage] = useState(0);
   const [rooms, setRooms] = useState<PlacedFurniture[][]>(loadRooms);
-  const [activeRoom, setActiveRoom] = useState(0);
+  const [activeRoom, setActiveRoom] = useState(HOUSE_VIEW);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [statsPerSpace, setStatsPerSpace] = useState(false);
+  const [savefileName, setSavefileName] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
+  const [houseInfo, setHouseInfo] = useState<HouseInfo | null>(loadHouseInfo);
+  // 0..1 while an auto-fill search runs, null when idle
+  const [fillProgress, setFillProgress] = useState<number | null>(null);
+  // quality summary of the last auto-fill ("how close to the theoretical max?")
+  const [fillReport, setFillReport] = useState<string | null>(null);
+  const [view, setView] = useState<AppView>('house');
 
-  const placed = rooms[activeRoom];
+  const isRoomUnlocked = useCallback((i: number): boolean => {
+    if (!houseInfo) return true; // unknown: assume everything available
+    if (i === ATTIC_INDEX) return houseInfo.atticUnlocked;
+    return i < houseInfo.regularRooms;
+  }, [houseInfo]);
 
-  // Force collapse room designer on mobile
+  // Surface the remembered savefile (if any) in the header
   useEffect(() => {
-    if (isMobile && expanded) setExpanded(false);
-  }, [isMobile, expanded]);
+    loadSavefileHandle().then((h) => { if (h) setSavefileName(h.name); });
+  }, []);
+
+  const placed = activeRoom === HOUSE_VIEW ? rooms.flat() : rooms[activeRoom];
+
+  const dismissHero = useCallback(() => {
+    setHeroSeen(true);
+    localStorage.setItem(HERO_SEEN_KEY, '1');
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(ownership));
@@ -167,9 +216,61 @@ function App() {
     localStorage.setItem(ROOMS_STORAGE_KEY, JSON.stringify(rooms));
   }, [rooms]);
 
+  // Undo/redo: every room mutation goes through updateRooms, which snapshots
+  // the previous state (rooms arrays are immutable, so references suffice).
+  const historyRef = useRef<{ past: PlacedFurniture[][][]; future: PlacedFurniture[][][] }>({ past: [], future: [] });
+  const [histVersion, setHistVersion] = useState(0);
+  const updateRooms = useCallback((next: PlacedFurniture[][] | ((prev: PlacedFurniture[][]) => PlacedFurniture[][])) => {
+    setRooms((prev) => {
+      const value = typeof next === 'function' ? next(prev) : next;
+      if (value === prev) return prev;
+      const h = historyRef.current;
+      h.past.push(prev);
+      if (h.past.length > 100) h.past.shift();
+      h.future = [];
+      return value;
+    });
+    setHistVersion((v) => v + 1);
+  }, []);
+  const undo = useCallback(() => {
+    setRooms((prev) => {
+      const h = historyRef.current;
+      const last = h.past.pop();
+      if (!last) return prev;
+      h.future.push(prev);
+      return last;
+    });
+    setHistVersion((v) => v + 1);
+  }, []);
+  const redo = useCallback(() => {
+    setRooms((prev) => {
+      const h = historyRef.current;
+      const next = h.future.pop();
+      if (!next) return prev;
+      h.past.push(prev);
+      return next;
+    });
+    setHistVersion((v) => v + 1);
+  }, []);
+  void histVersion; // state only forces re-render so canUndo/canRedo stay fresh
+  const canUndo = historyRef.current.past.length > 0;
+  const canRedo = historyRef.current.future.length > 0;
+
+  // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z) anywhere outside text inputs
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA')) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
+
   const updateActiveRoom = useCallback((updater: (prev: PlacedFurniture[]) => PlacedFurniture[]) => {
-    setRooms(prev => prev.map((room, i) => i === activeRoom ? updater(room) : room));
-  }, [activeRoom]);
+    updateRooms(prev => prev.map((room, i) => i === activeRoom ? updater(room) : room));
+  }, [activeRoom, updateRooms]);
 
   const handlePlaceFurniture = useCallback((item: FurnitureItem, row: number, col: number) => {
     const instanceId = `placed-${nextInstanceId++}`;
@@ -241,6 +342,92 @@ function App() {
     });
   }, [updateActiveRoom, activeRoom]);
 
+
+
+  const handleAutoPopulate = useCallback(async (config: {
+    algorithm: AlgorithmKey;
+    plans: RoomFillPlan[];
+  }) => {
+    const { algorithm, plans } = config;
+    if (plans.length === 0) return;
+    const makeInstanceId = () => `placed-${nextInstanceId++}`;
+    // theorycrafting without a savegame: the whole in-game catalog is available
+    const effectiveOwnership = hasOwnership
+      ? ownership
+      : Object.fromEntries(allFurniture.map((it) => [it.id, 9]));
+    // longer search budget is fine now that progress is visible
+    const budgetMs = algorithm === 'maximize' ? 1500 : undefined;
+    setFillProgress(0);
+    setFillReport(null);
+
+    const roomCapacity = (ri: number) => {
+      const cfg = getRoomConfig(ri);
+      let n = 0;
+      for (let r = 0; r < cfg.rows; r++) {
+        for (let c = 0; c < cfg.cols; c++) if (cfg.isValidCell(r, c)) n++;
+      }
+      return n;
+    };
+
+    try {
+      // Rooms without a plan (locked, skipped, or simply not part of this
+      // fill) keep their content and their items stay reserved.
+      const planned = new Set(plans.map((p) => p.roomIndex));
+      const newRooms = rooms.map((room, i) => (planned.has(i) ? [] : [...room]));
+      const used: Record<string, number> = {};
+      for (const room of newRooms) {
+        for (const p of room) used[p.item.id] = (used[p.item.id] || 0) + 1;
+      }
+      let placedTotal = 0;
+      let achievedScore = 0;
+      let upperScore = 0;
+      let cellsUsed = 0;
+      let capacity = 0;
+      for (let pi = 0; pi < plans.length; pi++) {
+        const plan = plans[pi];
+        // loose upper bound: every remaining positive-scoring copy placed, geometry ignored
+        for (const it of allFurniture) {
+          const remaining = (effectiveOwnership[it.id] ?? 0) - (used[it.id] ?? 0);
+          if (remaining <= 0) continue;
+          const sc = statScore(it, plan.weights);
+          if (sc > 0) upperScore += sc * remaining;
+        }
+        const result = await autoPopulateRoomAsync({
+          weights: plan.weights,
+          minStats: plan.minStats,
+          mustInclude: plan.mustInclude,
+          algorithm,
+          budgetMs,
+          roomIndex: plan.roomIndex,
+          allFurniture,
+          ownership: effectiveOwnership,
+          usedInOtherRooms: { ...used },
+          makeInstanceId,
+        }, (p) => setFillProgress((pi + p.fraction) / plans.length));
+        newRooms[plan.roomIndex] = result;
+        placedTotal += result.length;
+        for (const p of result) {
+          used[p.item.id] = (used[p.item.id] || 0) + 1;
+          achievedScore += statScore(p.item, plan.weights);
+          cellsUsed += p.item.spacesOccupied;
+        }
+        capacity += roomCapacity(plan.roomIndex);
+      }
+      if (placedTotal === 0) {
+        window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
+        return;
+      }
+      updateRooms(newRooms);
+      // % vs the catalog is meaningless when theorycrafting without a save
+      const pct = upperScore > 0 ? Math.round((achievedScore / upperScore) * 100) : 100;
+      setFillReport(hasOwnership
+        ? `Score ${achievedScore} \u2014 ${pct}% of the theoretical max (every scoring copy placed, space ignored) \u00b7 ${cellsUsed}/${capacity} cells used`
+        : `Score ${achievedScore} (full catalog, no savegame) \u00b7 ${cellsUsed}/${capacity} cells used`);
+    } finally {
+      setFillProgress(null);
+    }
+  }, [rooms, ownership, hasOwnership, updateRooms]);
+
   const handleSortChange = useCallback((field: SortField) => {
     setSort((prev) => ({
       field,
@@ -258,9 +445,64 @@ function App() {
     setOwnership((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
   }, []);
 
-  const handleImportOwnership = useCallback((newOwnership: Record<string, number>) => {
-    setOwnership(newOwnership);
+  const handleImportOwnership = useCallback((newOwnership: Record<string, number> | null, newHouseInfo: HouseInfo | null = null, placements: SavedPlacement[] | null = null) => {
+    if (newOwnership) {
+      setOwnership(newOwnership);
+      // After loading a savegame, show what the player actually owns
+      setFilters((prev) => ({ ...prev, onlyOwned: true }));
+      // ...and get the drawer out of the way: the house is the main view now
+      setDrawerOpen(false);
+    }
+    if (newHouseInfo) {
+      setHouseInfo(newHouseInfo);
+      localStorage.setItem(HOUSE_UNLOCKS_KEY, JSON.stringify(newHouseInfo));
+    }
+    if (placements) {
+      const byId = new Map(allFurniture.map((f) => [f.id, f]));
+      const newRooms: PlacedFurniture[][] = Array.from({ length: NUM_ROOMS }, () => []);
+      for (let ri = 0; ri < NUM_ROOMS; ri++) {
+        const roomPls = placements.filter((pl) => pl.roomIndex === ri);
+        newRooms[ri] = applyRoomPlacements(ri, roomPls, byId).map((p) => ({
+          instanceId: `placed-${nextInstanceId++}`,
+          item: p.item,
+          row: p.row,
+          col: p.col,
+        }));
+      }
+      updateRooms(newRooms);
+      setActiveRoom(HOUSE_VIEW);
+    }
+  }, [updateRooms]);
+
+  const openImportModal = useCallback(() => {
+    dismissHero();
+    setImportModalOpen(true);
+  }, [dismissHero]);
+
+  const handleSavefileHandleCaptured = useCallback((handle: FileSystemFileHandle) => {
+    setSavefileName(handle.name);
+    saveSavefileHandle(handle).catch(() => { /* remembering is best-effort */ });
   }, []);
+
+  // One-click re-import from the remembered file; falls back to the dialog
+  const handleLoadSavegame = useCallback(async () => {
+    dismissHero();
+    setReloading(true);
+    try {
+      const remembered = await readRememberedSavefile();
+      if (remembered) {
+        const { ownership: newOwnership, houseInfo: hi, placements } = await parseSavegame(remembered.data, furnitureIdMap);
+        if (Object.keys(newOwnership).length > 0) {
+          handleImportOwnership(newOwnership, hi, placements);
+          return;
+        }
+      }
+    } catch { /* fall through to the dialog */ }
+    finally {
+      setReloading(false);
+    }
+    setImportModalOpen(true);
+  }, [dismissHero, handleImportOwnership]);
 
   const handleImportRooms = useCallback((allEntries: { id: string; row: number; col: number }[][]) => {
     const furnitureById = new Map(allFurniture.map(f => [f.id, f]));
@@ -275,9 +517,9 @@ function App() {
       return room;
     });
     while (newRooms.length < NUM_ROOMS) newRooms.push([]);
-    setRooms(newRooms);
+    updateRooms(newRooms);
     setActiveRoom(0);
-  }, []);
+  }, [updateRooms]);
 
   const handleDecrement = useCallback((id: string) => {
     setOwnership((prev) => {
@@ -391,13 +633,82 @@ function App() {
   return (
     <div style={{
       ...layoutStyles.main,
+      display: 'flex',
+      flexDirection: 'column',
       ...(isMobile ? { height: 'auto', minHeight: '100vh', overflow: 'visible' } : {}),
     }}>
+      {!isMobile && !heroSeen && (
+        <WelcomeHero onLoadSavegame={openImportModal} onBrowse={dismissHero} />
+      )}
+      {!isMobile && (
+        <AppHeader
+          onHome={() => { setView('house'); setActiveRoom(HOUSE_VIEW); }}
+          onLoadSavegame={handleLoadSavegame}
+          hasOwnership={hasOwnership}
+          savefileName={savefileName}
+          reloading={reloading}
+          view={view}
+          onViewChange={setView}
+        />
+      )}
+      {!isMobile && view === 'furniture' ? (
+        <div style={{ flex: 1, minHeight: 0, padding: 16, maxWidth: 1200, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+          <FurnitureBrowser
+            items={pagedItems}
+            totalItems={filteredAndSorted.length}
+            ownership={ownership}
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            sort={sort}
+            onSortChange={handleSortChange}
+            onIncrement={handleIncrement}
+            onDecrement={handleDecrement}
+            expanded
+            onToggle={() => {}}
+            showToggle={false}
+            page={clampedPage}
+            totalPages={totalPages}
+            onPageChange={setPage}
+            onImportClick={openImportModal}
+            isMobile={isMobile}
+            statsPerSpace={statsPerSpace}
+            onStatsPerSpaceChange={setStatsPerSpace}
+            usedCounts={usedCounts}
+          />
+        </div>
+      ) : (
+      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
       <SplitScreenContainer>
+        {!isMobile && (
+          <RoomDesignerWorkspace
+            visible
+            placed={placed}
+            rooms={rooms}
+            activeRoom={activeRoom}
+            onActiveRoomChange={setActiveRoom}
+            onPlace={handlePlaceFurniture}
+            onRemove={handleRemoveFurniture}
+            onMove={handleMoveFurniture}
+            onImportRooms={handleImportRooms}
+            onAutoPopulate={handleAutoPopulate}
+            ownership={ownership}
+            drawerOpen={drawerOpen}
+            onToggleDrawer={() => setDrawerOpen((v) => !v)}
+            isRoomUnlocked={isRoomUnlocked}
+            idols={idolItems}
+            foodBox={foodBoxItem && (ownership[foodBoxItem.id] || 0) > 0 ? foodBoxItem : null}
+            fillProgress={fillProgress}
+            fillReport={fillReport}
+            onEmptyRooms={(idxs) => updateRooms((prev) => prev.map((room, i) => (idxs.includes(i) ? [] : room)))}
+            onUndo={canUndo ? undo : undefined}
+            onRedo={canRedo ? redo : undefined}
+          />
+        )}
         <div
           style={{
             ...layoutStyles.browserWrapper,
-            width: isMobile ? '100%' : expanded ? '45%' : 'calc(100% - 24px)',
+            width: isMobile ? '100%' : drawerOpen ? 'min(460px, 42%)' : '0%',
+            ...(!drawerOpen && !isMobile ? { overflow: 'hidden', opacity: 0, pointerEvents: 'none' as const } : {}),
             ...(isMobile ? { height: 'auto', overflow: 'visible', transition: 'none', position: 'static' as const } : {}),
           }}
         >
@@ -411,38 +722,52 @@ function App() {
             onSortChange={handleSortChange}
             onIncrement={handleIncrement}
             onDecrement={handleDecrement}
-            expanded={expanded}
-            onToggle={() => setExpanded((prev) => !prev)}
+            expanded={!isMobile}
+            onToggle={() => setDrawerOpen((prev) => !prev)}
             page={clampedPage}
             totalPages={totalPages}
             onPageChange={setPage}
-            onImportClick={() => setImportModalOpen(true)}
+            onImportClick={openImportModal}
             isMobile={isMobile}
             statsPerSpace={statsPerSpace}
             onStatsPerSpaceChange={setStatsPerSpace}
             usedCounts={usedCounts}
           />
         </div>
-        {!isMobile && (
-          <RoomDesignerWorkspace
-            visible={expanded}
-            placed={placed}
-            rooms={rooms}
-            activeRoom={activeRoom}
-            onActiveRoomChange={setActiveRoom}
-            onPlace={handlePlaceFurniture}
-            onRemove={handleRemoveFurniture}
-            onMove={handleMoveFurniture}
-            onImportRooms={handleImportRooms}
-            ownership={ownership}
-          />
+        {!isMobile && !drawerOpen && (
+          <button
+            onClick={() => setDrawerOpen(true)}
+            title="Show furniture list"
+            style={{
+              position: 'absolute',
+              right: 0,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: 20,
+              height: 60,
+              borderRadius: '8px 0 0 8px',
+              border: '1px solid var(--border)',
+              borderRight: 'none',
+              background: 'var(--code-bg)',
+              color: 'var(--text)',
+              cursor: 'pointer',
+              fontSize: 14,
+              padding: 0,
+              zIndex: 20,
+            }}
+          >
+            ◂
+          </button>
         )}
       </SplitScreenContainer>
+      </div>
+      )}
       <SaveImportModal
         open={importModalOpen}
         onClose={() => setImportModalOpen(false)}
         onImport={handleImportOwnership}
         furnitureIdMap={furnitureIdMap}
+        onHandleCaptured={handleSavefileHandleCaptured}
       />
     </div>
   );

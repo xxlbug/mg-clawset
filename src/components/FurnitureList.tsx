@@ -47,18 +47,6 @@ const styles: Record<string, CSSProperties> = {
     minWidth: 100,
     textAlign: 'center',
   },
-  importButton: {
-    padding: '4px 10px',
-    borderRadius: 6,
-    border: '1px solid var(--border)',
-    background: 'var(--code-bg)',
-    color: 'var(--text)',
-    fontFamily: 'var(--font)',
-    fontSize: 11,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-  },
 };
 
 interface Props {
@@ -71,7 +59,6 @@ interface Props {
   totalPages: number;
   onPageChange: (page: number) => void;
   compact?: boolean;
-  onImportClick: () => void;
   isMobile?: boolean;
   statsPerSpace?: boolean;
   usedCounts?: Record<string, number>;
@@ -87,7 +74,6 @@ export default function FurnitureList({
   totalPages,
   onPageChange,
   compact,
-  onImportClick,
   isMobile,
   statsPerSpace,
   usedCounts,
@@ -120,13 +106,6 @@ export default function FurnitureList({
         ...styles.paginationRow,
         ...(isMobile ? { flexDirection: 'column', gap: 8, padding: '10px 12px' } : {}),
       }}>
-        <button
-          style={styles.importButton}
-          onClick={onImportClick}
-          title="Import inventory from Mewgenics save file"
-        >
-          📂 Import from savefile
-        </button>
         <div style={styles.paginationCenter}>
           <button
             style={{

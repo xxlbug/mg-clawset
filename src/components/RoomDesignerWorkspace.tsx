@@ -641,7 +641,39 @@ export default function RoomDesignerWorkspace({
         </div>
       </div>
       <div ref={linkRootRef} style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0, position: 'relative' }}>
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0, minWidth: 0 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0, minWidth: 0, position: 'relative' }}>
+          {/* Floating undo/redo, centered over the open room, above the bottom bar */}
+          <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 10, zIndex: 50 }}>
+            {([
+              { fn: onUndo, label: '↶', tip: 'Undo room change (Ctrl+Z)' },
+              { fn: onRedo, label: '↷', tip: 'Redo room change (Ctrl+Y)' },
+            ] as const).map((b) => (
+              <button
+                key={b.tip}
+                style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: '50%',
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg)',
+                  color: b.fn ? 'var(--text-h)' : 'var(--text-m)',
+                  fontSize: 22,
+                  fontFamily: 'var(--font)',
+                  cursor: b.fn ? 'pointer' : 'not-allowed',
+                  opacity: b.fn ? 0.95 : 0.45,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                disabled={!b.fn}
+                onClick={b.fn}
+                title={b.tip}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
           {activeRoom === HOUSE_VIEW ? (
             <HouseView
               rooms={rooms}
@@ -678,38 +710,6 @@ export default function RoomDesignerWorkspace({
             onHoverItem={handleHoverItem}
           />
         )}
-        {/* Floating undo/redo over the room viewer */}
-        <div style={{ position: 'absolute', top: 36, right: 8, display: 'flex', gap: 6, zIndex: 50 }}>
-          {([
-            { fn: onUndo, label: '↶', tip: 'Undo room change (Ctrl+Z)' },
-            { fn: onRedo, label: '↷', tip: 'Redo room change (Ctrl+Y)' },
-          ] as const).map((b) => (
-            <button
-              key={b.tip}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: '50%',
-                border: '1px solid var(--border)',
-                background: 'var(--bg)',
-                color: b.fn ? 'var(--text-h)' : 'var(--text-m)',
-                fontSize: 17,
-                fontFamily: 'var(--font)',
-                cursor: b.fn ? 'pointer' : 'not-allowed',
-                opacity: b.fn ? 0.95 : 0.45,
-                boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              disabled={!b.fn}
-              onClick={b.fn}
-              title={b.tip}
-            >
-              {b.label}
-            </button>
-          ))}
-        </div>
         {hoverTip && (
           <div style={{
             position: 'absolute',

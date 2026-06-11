@@ -84,12 +84,14 @@ interface Props {
   /** Undo/redo for room mutations; undefined = nothing to un/redo. */
   onUndo?: () => void;
   onRedo?: () => void;
+  /** Clear all furniture from the given rooms (undoable). */
+  onEmptyRooms: (roomIndexes: number[]) => void;
 }
 
 export default function RoomDesignerWorkspace({
   visible, placed, rooms, activeRoom, onActiveRoomChange,
   onPlace, onRemove, onMove, onImportRooms, onAutoPopulate, ownership,
-  drawerOpen, onToggleDrawer, isRoomUnlocked, idols, foodBox, fillProgress = null, fillReport = null, onUndo, onRedo,
+  drawerOpen, onToggleDrawer, isRoomUnlocked, idols, foodBox, fillProgress = null, fillReport = null, onUndo, onRedo, onEmptyRooms,
 }: Props) {
   const [expertView, setExpertView] = useState(false);
   const [presetKey, setPresetKey] = useState<FillPresetKey | 'custom'>('breeding');
@@ -270,6 +272,14 @@ export default function RoomDesignerWorkspace({
       });
     }
     return plans;
+  };
+
+  const handleEmptyRooms = () => {
+    const targets = activeRoom === HOUSE_VIEW ? unlockedRooms : [activeRoom];
+    const count = targets.reduce((sum, ri) => sum + rooms[ri].length, 0);
+    if (count === 0) return;
+    if (!window.confirm(`Remove ${count} item(s) from ${activeRoom === HOUSE_VIEW ? 'all unlocked rooms' : getRoomLabel(activeRoom)}?`)) return;
+    onEmptyRooms(targets);
   };
 
   const handleAutoFill = () => {
@@ -640,6 +650,13 @@ export default function RoomDesignerWorkspace({
               Checklist
             </button>
             <button
+              style={smallBtn}
+              onClick={handleEmptyRooms}
+              title={activeRoom === HOUSE_VIEW ? 'Remove all furniture from every unlocked room' : `Remove all furniture from ${getRoomLabel(activeRoom)}`}
+            >
+              {activeRoom === HOUSE_VIEW ? 'Empty rooms' : 'Empty room'}
+            </button>
+            <button
               style={{ ...smallBtn, ...(drawerOpen ? { background: 'var(--accent-bg)', color: 'var(--accent)' } : {}) }}
               onClick={onToggleDrawer}
               title={drawerOpen ? 'Hide the furniture list' : 'Show the furniture list to browse and drag items manually'}
@@ -663,7 +680,8 @@ export default function RoomDesignerWorkspace({
       </div>
       <div ref={linkRootRef} style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0, position: 'relative' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0, minWidth: 0, position: 'relative' }}>
-          {/* Floating undo/redo, centered over the open room, above the bottom bar */}
+          {/* Floating undo/redo, centered over the open room, above the bottom bar (hidden in house view) */}
+          {activeRoom !== HOUSE_VIEW && (
           <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 10, zIndex: 50 }}>
             {([
               { fn: onUndo, label: '↶', tip: 'Undo room change (Ctrl+Z)' },
@@ -695,6 +713,7 @@ export default function RoomDesignerWorkspace({
               </button>
             ))}
           </div>
+          )}
           {activeRoom === HOUSE_VIEW ? (
             <HouseView
               rooms={rooms}

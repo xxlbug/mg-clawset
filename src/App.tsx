@@ -445,6 +445,8 @@ function App() {
       setOwnership(newOwnership);
       // After loading a savegame, show what the player actually owns
       setFilters((prev) => ({ ...prev, onlyOwned: true }));
+      // ...and get the drawer out of the way: the house is the main view now
+      setDrawerOpen(false);
     }
     if (newHouseInfo) {
       setHouseInfo(newHouseInfo);
@@ -691,6 +693,7 @@ function App() {
             foodBox={foodBoxItem && (ownership[foodBoxItem.id] || 0) > 0 ? foodBoxItem : null}
             fillProgress={fillProgress}
             fillReport={fillReport}
+            onEmptyRooms={(idxs) => updateRooms((prev) => prev.map((room, i) => (idxs.includes(i) ? [] : room)))}
             onUndo={canUndo ? undo : undefined}
             onRedo={canRedo ? redo : undefined}
           />

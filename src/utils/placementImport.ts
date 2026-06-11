@@ -1,4 +1,4 @@
-import type { FurnitureItem } from '../types/furniture';
+import type { FurnitureItem, RoomConfig } from '../types/furniture';
 import { getRoomConfig } from '../types/furniture';
 import type { SavedPlacement } from './savegame';
 
@@ -106,5 +106,53 @@ export function applyRoomPlacements(
     for (const [r, c] of solids) occupied.add(`${row0 + r},${col0 + c}`);
     result.push({ item, row: row0, col: col0 });
   }
+
+  settleUnstableChains(result, cfg);
   return result;
+}
+
+/**
+ * Whole-chain gravity. The per-item pass keeps pieces that rest on other
+ * pieces, but a cluster can justify itself in mid-air (each item "supported"
+ * by the next, none touching the floor). Compute stability transitively from
+ * the floor and drop every unstable piece in lock-step until its anchors meet
+ * a stable piece or the floor — sinking clusters land as intact stacks.
+ */
+function settleUnstableChains(pieces: ImportedPlacement[], cfg: RoomConfig): void {
+  const falls = pieces.map((p) => anchorDir(p.item.shape) === 'below');
+
+  for (let guard = 0; guard < cfg.rows * pieces.length; guard++) {
+    const stable = new Set<number>();
+    pieces.forEach((_, i) => { if (!falls[i]) stable.add(i); });
+
+    const cellOwner = new Map<string, number>();
+    pieces.forEach((p, i) => {
+      for (const [r, c] of solidOffsets(p.item.shape)) cellOwner.set(`${p.row + r},${p.col + c}`, i);
+    });
+
+    for (let changed = true; changed;) {
+      changed = false;
+      pieces.forEach((p, i) => {
+        if (stable.has(i)) return;
+        const anchors = anchorCells(p.item.shape);
+        const probe = anchors.length ? anchors : solidOffsets(p.item.shape).filter(
+          ([r]) => r === Math.max(...solidOffsets(p.item.shape).map(([rr]) => rr)),
+        ).map(([r, c]): [number, number] => [r + 1, c]);
+        for (const [ar, ac] of probe) {
+          const r = p.row + ar;
+          if (r >= cfg.rows) { stable.add(i); changed = true; return; }
+          for (const d of [0, -1, 1]) {
+            const owner = cellOwner.get(`${r},${p.col + ac + d}`);
+            if (owner !== undefined && owner !== i && stable.has(owner)) {
+              stable.add(i); changed = true; return;
+            }
+          }
+        }
+      });
+    }
+
+    const unstable = pieces.map((_, i) => i).filter((i) => !stable.has(i));
+    if (unstable.length === 0) return;
+    for (const i of unstable) pieces[i].row += 1;
+  }
 }

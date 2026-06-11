@@ -472,3 +472,17 @@ Chaos) instead of only owned ones. Unowned idols render disabled with a
 idols without a curated note derive their tooltip from their stats
 ("Stat idol (+5 Comfort)"). The Storage preset's automatic Idol of
 Chastity selection now checks ownership before selecting/forcing it.
+
+## Addendum (2026-06-11, #18): Chain settling, house-view cleanups, empty buttons
+
+- **Import chain settling.** The per-item settle pass kept clusters that
+  justified themselves in mid-air (each record resting on the next, none
+  touching the floor). A whole-chain gravity pass now computes stability
+  transitively from the floor and sinks unstable pieces in lock-step, so
+  clusters land as intact stacks. Verified on the reference save: zero
+  floor-disconnected chains after import.
+- Undo/redo buttons hidden in the house view (they floated over room
+  content there); still available in every single-room view + shortcuts.
+- Importing a savegame no longer leaves the furniture drawer open.
+- New "Empty room" / "Empty rooms" button (label follows the view) clears
+  the open room or all unlocked rooms after a confirm; fully undoable.

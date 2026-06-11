@@ -78,6 +78,17 @@ describe('applyRoomPlacements', () => {
     expect(out[1].row).toBeGreaterThanOrEqual(0);
   });
 
+  it('sinks a self-supporting mid-air cluster to the floor as one stack', () => {
+    // box at row 2 with a trinket on it at row 1: each "supports" the other's
+    // record but the chain never touches the floor — both must sink 4 rows
+    const out = applyRoomPlacements(0, [
+      pl('box', 4, 2, 1),
+      pl('trinket', 4, 1, 2),
+    ], byId);
+    expect(out[0]).toMatchObject({ row: 6, col: 4 });   // box on the floor
+    expect(out[1]).toMatchObject({ row: 5, col: 4 });   // trinket still on the box
+  });
+
   it('snaps a trinket carrying its supporter cell coordinates on top', () => {
     const out = applyRoomPlacements(0, [
       pl('box', 4, 6, 1),

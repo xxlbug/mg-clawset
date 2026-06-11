@@ -3,6 +3,9 @@ import type { CSSProperties } from 'react';
 import type { FurnitureItem, PlacedFurniture } from '../types/furniture';
 import { getRoomLabel } from '../types/furniture';
 import FurnitureImage from './FurnitureImage';
+import StatIcon from './StatIcon';
+import { STAT_COLORS } from '../utils/statColors';
+import { ALL_STATS } from '../utils/autoPopulate';
 
 const CHECKLIST_KEY = 'mg-clawset-checklist';
 
@@ -129,6 +132,18 @@ export default function RoomChecklist({ placed, roomIndex, numbers, hoverItemId,
                   <FurnitureImage src={e.item.image_url} alt={e.item.name} compact />
                   <span style={{ flex: 1, minWidth: 0 }}>
                     {e.count > 1 ? `${e.count}× ` : ''}{e.item.name}
+                    <span style={{ display: 'flex', gap: 7, fontSize: 10, fontWeight: 700, marginTop: 1 }}>
+                      {ALL_STATS.filter((st) => e.item[st] !== 0).map((st) => {
+                        const v = e.item[st];
+                        const fmt = (n: number) => (n > 0 ? `+${n}` : `${n}`);
+                        return (
+                          <span key={st} style={{ color: STAT_COLORS[st], display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                            <StatIcon stat={st} size={10} />
+                            {e.count > 1 ? `${fmt(v)} (${fmt(v * e.count)})` : fmt(v)}
+                          </span>
+                        );
+                      })}
+                    </span>
                   </span>
                 </label>
               );

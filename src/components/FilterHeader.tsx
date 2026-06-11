@@ -8,9 +8,9 @@ import StatIcon from './StatIcon';
 import CatMascot from './CatMascot';
 import AdvancedFilters from './AdvancedFilters';
 
-const GRID_FULL = '56px 48px minmax(120px, 1fr) repeat(5, 60px) 90px';
-const GRID_COMPACT = '36px 28px minmax(40px, 1fr) repeat(5, 28px) 68px';
-const GRID_COMPACT_REM = '36px 28px minmax(40px, 1fr) repeat(5, 28px) 68px 48px';
+const GRID_FULL = 'minmax(160px, 1fr) repeat(5, 60px) 90px';
+const GRID_COMPACT = 'minmax(90px, 1fr) repeat(5, 28px) 68px';
+const GRID_COMPACT_REM = 'minmax(90px, 1fr) repeat(5, 28px) 68px 48px';
 
 const styles: Record<string, CSSProperties> = {
   wrapper: {
@@ -119,7 +119,6 @@ export default function FilterHeader({ filters, onFiltersChange, sort, onSortCha
   return (
     <div style={styles.wrapper}>
       <div style={headerGrid}>
-        <CatMascot compact={compact} onLoadSavegame={onLoadSavegame} />
         <SortButton
           label="Name"
           active={sort.field === 'name'}

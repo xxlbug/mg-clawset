@@ -38,6 +38,8 @@ interface Props {
   statsPerSpace: boolean;
   onStatsPerSpaceChange: (v: boolean) => void;
   usedCounts: Record<string, number>;
+  /** Hide the drawer collapse arrow (full-page furniture view). */
+  showToggle?: boolean;
 }
 
 export default function FurnitureBrowser({
@@ -60,6 +62,7 @@ export default function FurnitureBrowser({
   statsPerSpace,
   onStatsPerSpaceChange,
   usedCounts,
+  showToggle = true,
 }: Props) {
   return (
     <div style={{
@@ -88,12 +91,11 @@ export default function FurnitureBrowser({
         totalPages={totalPages}
         onPageChange={onPageChange}
         compact={expanded}
-        onImportClick={onImportClick}
         isMobile={isMobile}
         statsPerSpace={statsPerSpace}
         usedCounts={expanded ? usedCounts : undefined}
       />
-      {!isMobile && <ViewToggleButton expanded={expanded} onClick={onToggle} />}
+      {!isMobile && showToggle && <ViewToggleButton expanded={expanded} onClick={onToggle} />}
     </div>
   );
 }

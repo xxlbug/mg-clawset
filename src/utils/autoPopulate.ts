@@ -51,6 +51,14 @@ export interface AutoPopulateOptions {
   noFillers?: boolean;
 }
 
+/** One room's share of an auto-fill request (house fills carry one per room). */
+export interface RoomFillPlan {
+  roomIndex: number;
+  weights: StatWeights;
+  mustInclude: string[];
+  minStats?: Partial<Record<StatKey, number>>;
+}
+
 export interface FillProgress {
   /** 0..1 share of the search budget consumed. */
   fraction: number;

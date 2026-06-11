@@ -373,3 +373,31 @@ Auto-fill now aims to use the whole collection, not just the densest scorers:
 Verified against the real save (Playwright): whole-house Maximize fill packs
 Room 1 to 112/112 cells, Room 2 to 109/112, attic to 129/136, with live
 progress samples 5%→100%; locked rooms stay untouched. 31 unit tests pass.
+
+## Addendum (2026-06-11, #12): UI rework — tabs, dedicated fill panel, per-room presets
+
+- **Top-bar tabs.** The header gains "House & Rooms" / "Furniture" tabs. The
+  furniture browser is now a full-page view (max 1200px, centered); the
+  right-side drawer remains available in the house/room view via the
+  secondary "Furniture" button.
+- **Leaner drawer.** Removed the duplicate mascot/logo from the drawer's
+  filter header (the search field now gets that space) and the redundant
+  "Import from savefile" button at the drawer bottom (the header button is
+  the one place to load saves).
+- **Dedicated auto-fill panel.** The Auto-fill dropdown became an always
+  visible panel under the stats summary: algorithm radios + prominent
+  Fill button (with the progress bar) on the first row, presets/stat
+  chips/options below. Checklist, Furniture and Expert View moved to a
+  small secondary row beneath it.
+- **Per-room house fill.** In house view the panel shows a preset selector
+  per unlocked room (Breeding / Storage / Mutation / Custom / Skip).
+  Custom uses the panel's stat chips; Skip keeps the room untouched;
+  Storage rooms auto-place the Idol of Chastity when owned.
+  `onAutoPopulate` now takes `{ algorithm, plans: RoomFillPlan[] }` and the
+  App fills each plan sequentially with aggregated progress.
+
+Verified via Playwright on the real save: tabs switch views, panel renders
+without opening a dropdown, per-room presets produce distinct stat profiles
+(attic Breeding: stimulation 53; Room 1 Storage: comfort 42 + health;
+Room 2 Mutation: mutation 6 with stimulation minimized), drawer still
+toggles in house view, locked rooms preserved. 31 unit tests pass.

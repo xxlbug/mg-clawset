@@ -3,10 +3,10 @@ import type { CSSProperties } from 'react';
 import type { FurnitureItem, PlacedFurniture } from '../types/furniture';
 import RoomGrid from './RoomGrid';
 import RoomStatsSummary from './RoomStatsSummary';
-import { getRoomLabel, HOUSE_VIEW } from '../types/furniture';
+import { getRoomLabel, HOUSE_VIEW, ATTIC_INDEX } from '../types/furniture';
 import { captureRoom, captureHouse } from '../utils/roomCapture';
 import { ALGORITHMS, ALL_STATS, STAT_LABELS } from '../utils/autoPopulate';
-import type { AlgorithmKey, StatWeights } from '../utils/autoPopulate';
+import type { AlgorithmKey, StatWeights, RoomFillPlan } from '../utils/autoPopulate';
 import type { StatKey } from '../types/furniture';
 import StatIcon from './StatIcon';
 import RoomChecklist from './RoomChecklist';
@@ -66,10 +66,8 @@ interface Props {
   onMove: (instanceId: string, row: number, col: number) => void;
   onImportRooms: (entries: RoomExportEntry[][]) => void;
   onAutoPopulate: (config: {
-    weights: StatWeights;
     algorithm: AlgorithmKey;
-    mustInclude: string[];
-    minStats?: Partial<Record<StatKey, number>>;
+    plans: RoomFillPlan[];
   }) => void;
   ownership: Record<string, number>;
   drawerOpen: boolean;
@@ -89,8 +87,9 @@ export default function RoomDesignerWorkspace({
   drawerOpen, onToggleDrawer, isRoomUnlocked, idols, foodBox, fillProgress = null,
 }: Props) {
   const [expertView, setExpertView] = useState(false);
-  const [autoFillOpen, setAutoFillOpen] = useState(false);
   const [presetKey, setPresetKey] = useState<FillPresetKey | 'custom'>('breeding');
+  // house fill: independent preset per room
+  const [roomPresets, setRoomPresets] = useState<Record<number, FillPresetKey | 'custom' | 'skip'>>({});
   const [statWeights, setStatWeights] = useState<Record<StatKey, -1 | 0 | 1>>(
     () => ({ ...EMPTY_WEIGHTS, ...FILL_PRESETS.breeding.tristate }),
   );
@@ -185,7 +184,51 @@ export default function RoomDesignerWorkspace({
   const minStats = presetKey !== 'custom' ? FILL_PRESETS[presetKey].minStats : undefined;
   const hasPositiveWeight = ALL_STATS.some((st) => statWeights[st] > 0);
 
+  const unlockedRooms = ([ATTIC_INDEX, 0, 1, 2, 3] as number[]).filter(isRoomUnlocked);
+  const roomChoice = (ri: number) => roomPresets[ri] ?? 'breeding';
+  const houseUsesCustom = activeRoom === HOUSE_VIEW
+    && unlockedRooms.some((ri) => roomChoice(ri) === 'custom');
+  // custom rooms need at least one maximized stat; presets always have one
+  const fillReady = activeRoom === HOUSE_VIEW
+    ? unlockedRooms.some((ri) => roomChoice(ri) !== 'skip') && (!houseUsesCustom || hasPositiveWeight)
+    : hasPositiveWeight;
+
+  const buildHousePlans = (): RoomFillPlan[] => {
+    const plans: RoomFillPlan[] = [];
+    for (const ri of unlockedRooms) {
+      const choice = roomChoice(ri);
+      if (choice === 'skip') continue;
+      if (choice === 'custom') {
+        plans.push({ roomIndex: ri, weights: activeWeights, mustInclude: [] });
+        continue;
+      }
+      const preset = FILL_PRESETS[choice];
+      const autoIdol = preset.autoIdolKey
+        ? idols.find((i) => i.image_url.includes(preset.autoIdolKey!))
+        : undefined;
+      plans.push({
+        roomIndex: ri,
+        weights: Object.fromEntries(Object.entries(preset.tristate)) as StatWeights,
+        mustInclude: autoIdol ? [autoIdol.id] : [],
+        minStats: preset.minStats,
+      });
+    }
+    return plans;
+  };
+
   const handleAutoFill = () => {
+    if (activeRoom === HOUSE_VIEW) {
+      const plans = buildHousePlans();
+      const replacing = plans.reduce((s, p) => s + rooms[p.roomIndex].length, 0);
+      if (
+        replacing > 0 &&
+        !window.confirm(`Replace ${replacing} item(s) across ${plans.length} room(s) with auto-generated layouts?`)
+      ) {
+        return;
+      }
+      onAutoPopulate({ algorithm, plans });
+      return;
+    }
     const statText = ALL_STATS.filter((st) => statWeights[st] !== 0)
       .map((st) => `${statWeights[st] > 0 ? '+' : '\u2212'}${STAT_LABELS[st]}`)
       .join(' ');
@@ -196,13 +239,46 @@ export default function RoomDesignerWorkspace({
     ) {
       return;
     }
-    setAutoFillOpen(false);
-    const mustInclude = activeRoom === HOUSE_VIEW ? [] : [
+    const mustInclude = [
       ...idols.filter((i) => selectedIdols.has(i.id)).map((i) => i.id),
       ...(includeFood && foodBox ? [foodBox.id] : []),
     ];
-    onAutoPopulate({ weights: activeWeights, algorithm, mustInclude, minStats });
+    onAutoPopulate({
+      algorithm,
+      plans: [{ roomIndex: activeRoom, weights: activeWeights, mustInclude, minStats }],
+    });
   };
+
+  const statChips = (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 11, color: 'var(--text-m)' }} title="Click a stat to cycle: maximize \u2192 avoid \u2192 off">Stats:</span>
+      {ALL_STATS.map((stat) => (
+        <button
+          key={stat}
+          onClick={() => cycleStat(stat)}
+          title={`${STAT_LABELS[stat]} \u2014 click to cycle: maximize \u2192 avoid \u2192 off`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '3px 9px',
+            borderRadius: 14,
+            fontFamily: 'var(--font)',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            border: `1px solid ${statWeights[stat] !== 0 ? 'var(--accent)' : 'var(--border)'}`,
+            background: statWeights[stat] === 1 ? 'var(--accent)' : statWeights[stat] === -1 ? 'var(--charcoal)' : 'var(--bg)',
+            color: statWeights[stat] !== 0 ? '#fff' : 'var(--text-m)',
+          }}
+        >
+          <StatIcon stat={stat} size={13} />
+          {STAT_LABELS[stat]}
+          {statWeights[stat] === 1 ? ' +' : statWeights[stat] === -1 ? ' \u2212' : ''}
+        </button>
+      ))}
+    </div>
+  );
 
   const IDOL_NOTES: Record<string, string> = {
     suppressoridol: 'Cats will NOT breed in this room',
@@ -333,22 +409,50 @@ export default function RoomDesignerWorkspace({
           ownership={ownership}
           isRoomUnlocked={isRoomUnlocked}
         />
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', alignSelf: 'flex-start', position: 'relative' }}>
+      </div>
+      {/* Dedicated auto-fill panel */}
+      <div style={{
+        background: 'var(--social-bg)',
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        padding: '10px 14px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        flexShrink: 0,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-h)' }}>✨ Auto-fill</span>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {(Object.keys(ALGORITHMS) as AlgorithmKey[]).map((key) => (
+              <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text)', cursor: 'pointer' }} title={ALGORITHMS[key].description}>
+                <input
+                  type="radio"
+                  name="autofill-algorithm"
+                  checked={algorithm === key}
+                  onChange={() => setAlgorithm(key)}
+                />
+                {ALGORITHMS[key].label}
+              </label>
+            ))}
+          </div>
+          <div style={{ flex: 1 }} />
           <button
             style={{
               ...smallBtn,
-              background: autoFillOpen ? 'var(--accent-bg)' : 'var(--accent)',
-              color: autoFillOpen ? 'var(--accent)' : 'var(--bg)',
+              background: 'var(--accent)',
+              color: 'var(--bg)',
               border: '1px solid var(--accent)',
               fontWeight: 600,
-              padding: '6px 16px',
+              padding: '6px 20px',
               position: 'relative',
               overflow: 'hidden',
-              cursor: fillProgress !== null ? 'progress' : 'pointer',
+              opacity: fillReady && fillProgress === null ? 1 : 0.6,
+              cursor: fillProgress !== null ? 'progress' : fillReady ? 'pointer' : 'not-allowed',
             }}
-            disabled={fillProgress !== null}
-            onClick={() => setAutoFillOpen((v) => !v)}
-            title="Automatically fill this room with owned furniture"
+            disabled={!fillReady || fillProgress !== null}
+            onClick={handleAutoFill}
+            title={fillReady ? `Fill ${getRoomLabel(activeRoom)}` : 'Set at least one stat to maximize'}
           >
             {fillProgress !== null && (
               <span style={{
@@ -362,168 +466,115 @@ export default function RoomDesignerWorkspace({
             )}
             {fillProgress !== null
               ? `Optimizing\u2026 ${Math.round(fillProgress * 100)}%`
-              : <>✨ Auto-fill {autoFillOpen ? '\u25b4' : '\u25be'}</>}
+              : `Fill ${getRoomLabel(activeRoom)}`}
           </button>
-          <button
-            style={{ ...smallBtn, ...(checklistOpen ? { background: 'var(--accent-bg)', color: 'var(--accent)' } : {}) }}
-            onClick={() => setChecklistOpen((v) => !v)}
-            title="Tick off this room's items while placing them in the game"
-          >
-            Checklist
-          </button>
-          <button
-            style={{ ...smallBtn, ...(drawerOpen ? { background: 'var(--accent-bg)', color: 'var(--accent)' } : {}) }}
-            onClick={onToggleDrawer}
-            title={drawerOpen ? 'Hide the furniture list' : 'Show the furniture list to browse and drag items manually'}
-          >
-            {drawerOpen ? 'Hide furniture' : 'Furniture ▸'}
-          </button>
-          <button style={toggleBtn} onClick={() => setExpertView((v) => !v)}>
-            {expertView ? 'Image View' : 'Expert View'}
-          </button>
-          {autoFillOpen && (
-            <>
-              <div
-                style={{ position: 'fixed', inset: 0, zIndex: 9 }}
-                onClick={() => setAutoFillOpen(false)}
-              />
-              <div style={{
-                position: 'absolute',
-                top: 'calc(100% + 6px)',
-                right: 0,
-                zIndex: 10,
-                background: 'var(--code-bg)',
-                border: '1px solid var(--border)',
-                borderRadius: 12,
-                padding: 14,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10,
-                minWidth: 220,
-              }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-h)' }}>Preset</div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {(Object.keys(FILL_PRESETS) as FillPresetKey[]).map((key) => (
-                    <button
-                      key={key}
-                      style={{
-                        ...smallBtn,
-                        fontSize: 11,
-                        padding: '4px 8px',
-                        outline: 'none',
-                        ...(presetKey === key ? { background: 'var(--accent-bg)', color: 'var(--accent)', border: '1px solid var(--accent)' } : {}),
-                      }}
-                      onClick={() => applyPreset(key)}
-                      title={FILL_PRESETS[key].description}
-                    >
-                      {FILL_PRESETS[key].label}
-                    </button>
-                  ))}
-                </div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-h)', marginTop: 2 }}>
-                  Stats <span style={{ fontWeight: 400, color: 'var(--text-m)' }}>(click: maximize → avoid → off)</span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {ALL_STATS.map((stat) => (
-                    <div
-                      key={stat}
-                      style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text)', cursor: 'pointer' }}
-                      onClick={() => cycleStat(stat)}
-                    >
-                      <span style={{
-                        width: 18,
-                        height: 18,
-                        borderRadius: 4,
-                        border: '1px solid var(--border)',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 700,
-                        fontSize: 12,
-                        background: statWeights[stat] === 1 ? 'var(--accent)' : statWeights[stat] === -1 ? 'var(--charcoal)' : 'var(--social-bg)',
-                        color: statWeights[stat] !== 0 ? '#fff' : 'var(--text-m)',
-                      }}>
-                        {statWeights[stat] === 1 ? '+' : statWeights[stat] === -1 ? '\u2212' : ''}
-                      </span>
-                      <StatIcon stat={stat} size={14} />
-                      {STAT_LABELS[stat]}
-                    </div>
-                  ))}
-                </div>
-                {minStats?.comfort !== undefined && (
-                  <div style={{ fontSize: 11, color: 'var(--text-m)' }}>
-                    Keeps room Comfort ≥ {minStats.comfort} before maximizing.
-                  </div>
-                )}
-                <label
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: foodBox ? 'var(--text)' : 'var(--text-m)', cursor: foodBox ? 'pointer' : 'not-allowed', marginTop: 2 }}
-                  title={foodBox ? 'Force all owned Food Boxes into the layout (+40 max food each)' : 'No Food Box owned'}
-                >
-                  <input
-                    type="checkbox"
-                    disabled={!foodBox}
-                    checked={includeFood && !!foodBox}
-                    onChange={(e) => setIncludeFood(e.target.checked)}
-                  />
-                  Include food storage
+        </div>
+        {activeRoom === HOUSE_VIEW ? (
+          <>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+              {([ATTIC_INDEX, 0, 1, 2, 3] as number[]).filter(isRoomUnlocked).map((ri) => (
+                <label key={ri} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text)' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text-h)' }}>{getRoomLabel(ri)}</span>
+                  <select
+                    value={roomPresets[ri] ?? 'breeding'}
+                    onChange={(e) => setRoomPresets((prev) => ({ ...prev, [ri]: e.target.value as FillPresetKey | 'custom' | 'skip' }))}
+                    style={{
+                      padding: '4px 6px',
+                      borderRadius: 6,
+                      border: '1px solid var(--border)',
+                      background: 'var(--bg)',
+                      color: 'var(--text-h)',
+                      fontFamily: 'var(--font)',
+                      fontSize: 12,
+                    }}
+                  >
+                    {(Object.keys(FILL_PRESETS) as FillPresetKey[]).map((key) => (
+                      <option key={key} value={key}>{FILL_PRESETS[key].label}</option>
+                    ))}
+                    <option value="custom">Custom</option>
+                    <option value="skip">Skip (keep as is)</option>
+                  </select>
                 </label>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-h)', marginTop: 2 }}>Algorithm</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {(Object.keys(ALGORITHMS) as AlgorithmKey[]).map((key) => (
-                    <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text)', cursor: 'pointer' }} title={ALGORITHMS[key].description}>
-                      <input
-                        type="radio"
-                        name="autofill-algorithm"
-                        checked={algorithm === key}
-                        onChange={() => setAlgorithm(key)}
-                      />
-                      {ALGORITHMS[key].label}
-                    </label>
-                  ))}
-                </div>
-                {idols.length > 0 && (
-                  <>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-h)', marginTop: 2 }}>
-                      Idols (always placed)
-                    </div>
-                    {activeRoom === HOUSE_VIEW ? (
-                      <div style={{ fontSize: 11, color: 'var(--text-m)' }}>
-                        Open a single room to force idols into it.
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {idols.map((idol) => (
-                          <label key={idol.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text)', cursor: 'pointer' }} title={idolNote(idol)}>
-                            <input
-                              type="checkbox"
-                              checked={selectedIdols.has(idol.id)}
-                              onChange={() => toggleIdol(idol.id)}
-                            />
-                            {idol.name}
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
+              ))}
+            </div>
+            {houseUsesCustom && statChips}
+            <div style={{ fontSize: 11, color: 'var(--text-m)' }}>
+              Each room is filled with its own priorities. “Custom” uses the stat toggles{houseUsesCustom ? ' above' : ''}; “Skip” leaves the room untouched. The Idol of Chastity is placed automatically in Storage rooms when owned.
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-m)' }}>Preset:</span>
+              {(Object.keys(FILL_PRESETS) as FillPresetKey[]).map((key) => (
                 <button
+                  key={key}
                   style={{
                     ...smallBtn,
-                    marginTop: 4,
-                    opacity: hasPositiveWeight && fillProgress === null ? 1 : 0.5,
-                    cursor: hasPositiveWeight && fillProgress === null ? 'pointer' : 'not-allowed',
+                    fontSize: 11,
+                    padding: '4px 10px',
+                    outline: 'none',
+                    ...(presetKey === key ? { background: 'var(--accent-bg)', color: 'var(--accent)', border: '1px solid var(--accent)' } : {}),
                   }}
-                  disabled={!hasPositiveWeight || fillProgress !== null}
-                  onClick={handleAutoFill}
-                  title={hasPositiveWeight ? `Fill ${getRoomLabel(activeRoom)}` : 'Set at least one stat to maximize'}
+                  onClick={() => applyPreset(key)}
+                  title={FILL_PRESETS[key].description}
                 >
-                  Fill {getRoomLabel(activeRoom)}
+                  {FILL_PRESETS[key].label}
                 </button>
-              </div>
-            </>
-          )}
-        </div>
+              ))}
+            </div>
+            {statChips}
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+              {minStats?.comfort !== undefined && (
+                <span style={{ fontSize: 11, color: 'var(--text-m)' }}>
+                  Keeps room Comfort ≥ {minStats.comfort} before maximizing.
+                </span>
+              )}
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: foodBox ? 'var(--text)' : 'var(--text-m)', cursor: foodBox ? 'pointer' : 'not-allowed' }}
+                title={foodBox ? 'Force all owned Food Boxes into the layout (+40 max food each)' : 'No Food Box owned'}
+              >
+                <input
+                  type="checkbox"
+                  disabled={!foodBox}
+                  checked={includeFood && !!foodBox}
+                  onChange={(e) => setIncludeFood(e.target.checked)}
+                />
+                Include food storage
+              </label>
+              {idols.map((idol) => (
+                <label key={idol.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text)', cursor: 'pointer' }} title={idolNote(idol)}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIdols.has(idol.id)}
+                    onChange={() => toggleIdol(idol.id)}
+                  />
+                  {idol.name}
+                </label>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      {/* Secondary tools */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+        <button
+          style={{ ...smallBtn, ...(checklistOpen ? { background: 'var(--accent-bg)', color: 'var(--accent)' } : {}) }}
+          onClick={() => setChecklistOpen((v) => !v)}
+          title="Tick off this room's items while placing them in the game"
+        >
+          Checklist
+        </button>
+        <button
+          style={{ ...smallBtn, ...(drawerOpen ? { background: 'var(--accent-bg)', color: 'var(--accent)' } : {}) }}
+          onClick={onToggleDrawer}
+          title={drawerOpen ? 'Hide the furniture list' : 'Show the furniture list to browse and drag items manually'}
+        >
+          {drawerOpen ? 'Hide furniture' : 'Furniture ▸'}
+        </button>
+        <button style={toggleBtn} onClick={() => setExpertView((v) => !v)}>
+          {expertView ? 'Image View' : 'Expert View'}
+        </button>
       </div>
       <div ref={linkRootRef} style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0, position: 'relative' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0, minWidth: 0 }}>

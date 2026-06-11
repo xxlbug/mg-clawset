@@ -24,15 +24,33 @@ const loadBtn: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+export type AppView = 'house' | 'furniture';
+
 interface Props {
   onLoadSavegame: () => void;
   hasOwnership: boolean;
   savefileName: string | null;
   reloading: boolean;
+  /** Active main view; omit to hide the tabs (mobile). */
+  view?: AppView;
+  onViewChange?: (v: AppView) => void;
 }
 
-/** Persistent top bar: mascot (help), title, always-reachable savegame import. */
-export default function AppHeader({ onLoadSavegame, hasOwnership, savefileName, reloading }: Props) {
+const tabBtn = (active: boolean): CSSProperties => ({
+  padding: '7px 18px',
+  borderRadius: 8,
+  border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+  background: active ? 'var(--accent-bg)' : 'transparent',
+  color: active ? 'var(--accent)' : 'var(--text)',
+  fontWeight: 600,
+  fontSize: 13,
+  cursor: 'pointer',
+  fontFamily: 'var(--font)',
+  whiteSpace: 'nowrap',
+});
+
+/** Persistent top bar: mascot (help), title, view tabs, always-reachable savegame import. */
+export default function AppHeader({ onLoadSavegame, hasOwnership, savefileName, reloading, view, onViewChange }: Props) {
   return (
     <div style={bar}>
       {/* CatMascot renders the inline cat + click-to-open help overlay */}
@@ -47,6 +65,16 @@ export default function AppHeader({ onLoadSavegame, hasOwnership, savefileName, 
           room designer & furniture manager
         </span>
       </div>
+      {view && onViewChange && (
+        <div style={{ display: 'flex', gap: 4, marginLeft: 24 }}>
+          <button style={tabBtn(view === 'house')} onClick={() => onViewChange('house')} title="Design rooms and auto-fill the house">
+            🏠 House & Rooms
+          </button>
+          <button style={tabBtn(view === 'furniture')} onClick={() => onViewChange('furniture')} title="Browse and edit your furniture collection">
+            🪑 Furniture
+          </button>
+        </div>
+      )}
       <div style={{ flex: 1 }} />
       <button
         style={{ ...loadBtn, opacity: reloading ? 0.6 : 1 }}

@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { CSSProperties } from 'react';
-import type { Filters, SortConfig, SortField, FurnitureItem, RawFurnitureItem, PlacedFurniture, StatKey } from './types/furniture';
+import type { Filters, SortConfig, SortField, FurnitureItem, RawFurnitureItem, PlacedFurniture } from './types/furniture';
 import { getRoomConfig, ATTIC_INDEX, HOUSE_VIEW } from './types/furniture';
 import furnitureData from './data/furniture_data.json';
 import SplitScreenContainer from './components/SplitScreenContainer';
@@ -11,7 +11,8 @@ import AppHeader from './components/AppHeader';
 import WelcomeHero from './components/WelcomeHero';
 import { findAllAnchored, findAnchoredPieces, wouldCollide } from './utils/anchorHelpers';
 import { autoPopulateRoomAsync } from './utils/autoPopulate';
-import type { AlgorithmKey, StatWeights } from './utils/autoPopulate';
+import type { AlgorithmKey, RoomFillPlan } from './utils/autoPopulate';
+import type { AppView } from './components/AppHeader';
 import useIsMobile from './hooks/useIsMobile';
 import { parseSavegame } from './utils/savegame';
 import type { HouseInfo, SavedPlacement } from './utils/savegame';
@@ -185,6 +186,7 @@ function App() {
   const [houseInfo, setHouseInfo] = useState<HouseInfo | null>(loadHouseInfo);
   // 0..1 while an auto-fill search runs, null when idle
   const [fillProgress, setFillProgress] = useState<number | null>(null);
+  const [view, setView] = useState<AppView>('house');
 
   const isRoomUnlocked = useCallback((i: number): boolean => {
     if (!houseInfo) return true; // unknown: assume everything available
@@ -292,81 +294,53 @@ function App() {
   );
 
   const handleAutoPopulate = useCallback(async (config: {
-    weights: StatWeights;
     algorithm: AlgorithmKey;
-    mustInclude: string[];
-    minStats?: Partial<Record<StatKey, number>>;
+    plans: RoomFillPlan[];
   }) => {
-    const { weights, algorithm, mustInclude, minStats } = config;
+    const { algorithm, plans } = config;
+    if (plans.length === 0) return;
     const makeInstanceId = () => `placed-${nextInstanceId++}`;
     // longer search budget is fine now that progress is visible
     const budgetMs = algorithm === 'maximize' ? 1500 : undefined;
     setFillProgress(0);
 
     try {
-      if (activeRoom === HOUSE_VIEW) {
-        // Fill the whole house: attic first (largest), then rooms in order.
-        // Locked rooms keep their content and their items stay reserved.
-        const fillOrder = [ATTIC_INDEX, 0, 1, 2, 3].filter(isRoomUnlocked);
-        const newRooms = rooms.map((room, i) => (fillOrder.includes(i) ? [] : [...room]));
-        const used: Record<string, number> = {};
-        for (const room of newRooms) {
-          for (const p of room) used[p.item.id] = (used[p.item.id] || 0) + 1;
-        }
-        let placedTotal = 0;
-        for (let fi = 0; fi < fillOrder.length; fi++) {
-          const ri = fillOrder[fi];
-          const result = await autoPopulateRoomAsync({
-            weights,
-            minStats,
-            algorithm,
-            budgetMs,
-            roomIndex: ri,
-            allFurniture,
-            ownership,
-            usedInOtherRooms: { ...used },
-            makeInstanceId,
-          }, (p) => setFillProgress((fi + p.fraction) / fillOrder.length));
-          newRooms[ri] = result;
-          placedTotal += result.length;
-          for (const p of result) used[p.item.id] = (used[p.item.id] || 0) + 1;
-        }
-        if (placedTotal === 0) {
-          window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
-          return;
-        }
-        setRooms(newRooms);
-        return;
+      // Rooms without a plan (locked, skipped, or simply not part of this
+      // fill) keep their content and their items stay reserved.
+      const planned = new Set(plans.map((p) => p.roomIndex));
+      const newRooms = rooms.map((room, i) => (planned.has(i) ? [] : [...room]));
+      const used: Record<string, number> = {};
+      for (const room of newRooms) {
+        for (const p of room) used[p.item.id] = (used[p.item.id] || 0) + 1;
       }
-
-      const usedInOtherRooms: Record<string, number> = {};
-      rooms.forEach((room, i) => {
-        if (i === activeRoom) return;
-        for (const p of room) {
-          usedInOtherRooms[p.item.id] = (usedInOtherRooms[p.item.id] || 0) + 1;
-        }
-      });
-      const result = await autoPopulateRoomAsync({
-        weights,
-        minStats,
-        algorithm,
-        budgetMs,
-        roomIndex: activeRoom,
-        allFurniture,
-        ownership,
-        usedInOtherRooms,
-        makeInstanceId,
-        mustInclude,
-      }, (p) => setFillProgress(p.fraction));
-      if (result.length === 0) {
+      let placedTotal = 0;
+      for (let pi = 0; pi < plans.length; pi++) {
+        const plan = plans[pi];
+        const result = await autoPopulateRoomAsync({
+          weights: plan.weights,
+          minStats: plan.minStats,
+          mustInclude: plan.mustInclude,
+          algorithm,
+          budgetMs,
+          roomIndex: plan.roomIndex,
+          allFurniture,
+          ownership,
+          usedInOtherRooms: { ...used },
+          makeInstanceId,
+        }, (p) => setFillProgress((pi + p.fraction) / plans.length));
+        newRooms[plan.roomIndex] = result;
+        placedTotal += result.length;
+        for (const p of result) used[p.item.id] = (used[p.item.id] || 0) + 1;
+      }
+      if (placedTotal === 0) {
         window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
         return;
       }
-      setRooms(prev => prev.map((room, i) => (i === activeRoom ? result : room)));
+      setRooms(newRooms);
     } finally {
       setFillProgress(null);
     }
-  }, [rooms, activeRoom, ownership, isRoomUnlocked]);
+  }, [rooms, ownership]);
 
   const handleSortChange = useCallback((field: SortField) => {
     setSort((prev) => ({
@@ -584,8 +558,36 @@ function App() {
           hasOwnership={hasOwnership}
           savefileName={savefileName}
           reloading={reloading}
+          view={view}
+          onViewChange={setView}
         />
       )}
+      {!isMobile && view === 'furniture' ? (
+        <div style={{ flex: 1, minHeight: 0, padding: 16, maxWidth: 1200, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+          <FurnitureBrowser
+            items={pagedItems}
+            totalItems={filteredAndSorted.length}
+            ownership={ownership}
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            sort={sort}
+            onSortChange={handleSortChange}
+            onIncrement={handleIncrement}
+            onDecrement={handleDecrement}
+            expanded
+            onToggle={() => {}}
+            showToggle={false}
+            page={clampedPage}
+            totalPages={totalPages}
+            onPageChange={setPage}
+            onImportClick={openImportModal}
+            isMobile={isMobile}
+            statsPerSpace={statsPerSpace}
+            onStatsPerSpaceChange={setStatsPerSpace}
+            usedCounts={usedCounts}
+          />
+        </div>
+      ) : (
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
       <SplitScreenContainer>
         {!isMobile && (
@@ -666,6 +668,7 @@ function App() {
         )}
       </SplitScreenContainer>
       </div>
+      )}
       <SaveImportModal
         open={importModalOpen}
         onClose={() => setImportModalOpen(false)}

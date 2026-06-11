@@ -498,3 +498,24 @@ both the per-item settle and the chain-stability pass. Genuine
 off-by-one stacks land on the floor beside their supporter instead of
 hovering — grounded beats clever. Verified: the only "unsupported" items
 after import are ceiling-hung pieces (fans), which is correct.
+
+## Addendum (2026-06-11, #20): Out-of-bounds repair pass
+
+The Isaac Plush exposed that the import pipeline never enforced room-shape
+validity: a record can point at a cell outside the attic trapezoid (its
+row simply is not that wide). New final repair pass after settling:
+pieces with any solid cell outside the room shape are relocated to the
+nearest valid, unoccupied, supported position (radius search preferring
+small shifts). Import audit on the reference save: zero out-of-bounds
+cells, zero unsupported standing items, across all rooms.
+
+On the underlying question "is there no reliable coordinate system in the
+save": x/y are reliable absolute grid coordinates for free-standing and
+directly-stacked items (verified by controlled saves). For dense stacks
+the record encodes a support relationship (not stored anywhere in the
+blob - trailing bytes are constant) plus an apparent render-side
+depth-lane offset, so a minority of records point at cells the room
+cannot hold. The pipeline therefore: maps coordinates faithfully ->
+snaps trinkets carrying supporter cells -> settles unsupported chains ->
+repairs out-of-bounds records. Item identity, counts and room membership
+are always exact.

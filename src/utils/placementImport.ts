@@ -103,7 +103,62 @@ export function applyRoomPlacements(
   }
 
   settleUnstableChains(result, cfg);
+  repairInvalidCells(result, cfg);
   return result;
+}
+
+/**
+ * Records can point outside the room shape (attic trapezoid) when they carry
+ * stacked-support semantics the save does not encode. Relocate such pieces to
+ * the nearest valid, free, supported spot instead of rendering out of bounds.
+ */
+function repairInvalidCells(pieces: ImportedPlacement[], cfg: RoomConfig): void {
+  const occupied = new Map<string, number>();
+  pieces.forEach((p, i) => {
+    for (const [r, c] of solidOffsets(p.item.shape)) occupied.set(`${p.row + r},${p.col + c}`, i);
+  });
+
+  pieces.forEach((p, i) => {
+    const solids = solidOffsets(p.item.shape);
+    const anchors = anchorCells(p.item.shape);
+    const dir = anchorDir(p.item.shape);
+    const validAt = (row0: number, col0: number) =>
+      solids.every(([r, c]) => cfg.isValidCell(row0 + r, col0 + c));
+    const freeAt = (row0: number, col0: number) =>
+      solids.every(([r, c]) => {
+        const owner = occupied.get(`${row0 + r},${col0 + c}`);
+        return owner === undefined || owner === i;
+      });
+    const supportedAt = (row0: number, col0: number) => {
+      if (dir !== 'below') return true;
+      return anchors.some(([ar, ac]) => {
+        const r = row0 + ar;
+        if (r >= cfg.rows) return true;
+        const owner = occupied.get(`${r},${col0 + ac}`);
+        return owner !== undefined && owner !== i;
+      });
+    };
+
+    if (validAt(p.row, p.col)) return;
+
+    // nearest valid+free+supported spot, preferring small column shifts
+    outer:
+    for (let radius = 1; radius <= cfg.rows + cfg.cols; radius++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        for (let dr = -radius; dr <= radius; dr++) {
+          if (Math.abs(dc) + Math.abs(dr) !== radius) continue;
+          const row0 = p.row + dr;
+          const col0 = p.col + dc;
+          if (!validAt(row0, col0) || !freeAt(row0, col0) || !supportedAt(row0, col0)) continue;
+          for (const [r, c] of solids) occupied.delete(`${p.row + r},${p.col + c}`);
+          p.row = row0;
+          p.col = col0;
+          for (const [r, c] of solids) occupied.set(`${p.row + r},${p.col + c}`, i);
+          break outer;
+        }
+      }
+    }
+  });
 }
 
 /**

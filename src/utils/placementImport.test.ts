@@ -91,6 +91,15 @@ describe('applyRoomPlacements', () => {
     expect(out[1]).toMatchObject({ row: 5, col: 4 });   // trinket still on the box
   });
 
+  it('relocates pieces whose record lands outside the attic shape', () => {
+    // attic row 4 is only valid for cols 6-24; col 26 first becomes valid in
+    // row 5 - a trinket recorded there must end up inside the trapezoid
+    const out = applyRoomPlacements(4, [pl('trinket', 26, 4, 1)], byId);
+    const [p] = out;
+    const valid = (r: number, c: number) => { if (r < 0 || r > 7) return false; const s0 = 14 - r * 2; return c >= s0 && c < s0 + 3 + r * 4; };
+    expect(valid(p.row, p.col)).toBe(true);
+  });
+
   it('snaps a trinket carrying its supporter cell coordinates on top', () => {
     const out = applyRoomPlacements(0, [
       pl('box', 4, 6, 1),

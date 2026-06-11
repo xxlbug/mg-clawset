@@ -74,8 +74,14 @@ export default function WelcomeHero({ onLoadSavegame, onBrowse }: Props) {
         <button style={secondaryBtn} onClick={onBrowse}>
           Browse without a save
         </button>
-        <div style={{ fontSize: 11, color: 'var(--text-m)' }}>
-          Click the cat in the top bar anytime for help.
+        <div style={{ fontSize: 11, color: 'var(--text-m)', lineHeight: 1.6 }}>
+          Based on mg-clawset by baenar —{' '}
+          <a href="https://x.com/baenar_" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--text-m)' }}>
+            @baenar_ on X
+          </a>{' '}·{' '}
+          <a href="https://github.com/baenar" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--text-m)' }}>
+            @baenar on GitHub
+          </a>
         </div>
       </div>
     </div>

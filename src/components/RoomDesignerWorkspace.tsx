@@ -10,6 +10,7 @@ import type { AlgorithmKey, StatWeights, RoomFillPlan } from '../utils/autoPopul
 import type { StatKey } from '../types/furniture';
 import StatIcon from './StatIcon';
 import RoomChecklist from './RoomChecklist';
+import { STAT_COLORS } from '../utils/statColors';
 import HouseView from './HouseView';
 
 const LEGEND: { type: number; color: string; border: string; label: string }[] = [
@@ -333,8 +334,8 @@ export default function RoomDesignerWorkspace({
             fontSize: 12,
             fontWeight: 600,
             cursor: 'pointer',
-            border: `1px solid ${weights[stat] !== 0 ? 'var(--accent)' : 'var(--border)'}`,
-            background: weights[stat] === 1 ? 'var(--accent)' : weights[stat] === -1 ? 'var(--charcoal)' : 'var(--bg)',
+            border: `1px solid ${weights[stat] === 1 ? STAT_COLORS[stat] : weights[stat] === -1 ? 'var(--charcoal)' : 'var(--border)'}`,
+            background: weights[stat] === 1 ? STAT_COLORS[stat] : weights[stat] === -1 ? 'var(--charcoal)' : 'var(--bg)',
             color: weights[stat] !== 0 ? '#fff' : 'var(--text-m)',
           }}
         >

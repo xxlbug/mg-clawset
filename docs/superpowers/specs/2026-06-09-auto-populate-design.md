@@ -519,3 +519,14 @@ cannot hold. The pipeline therefore: maps coordinates faithfully ->
 snaps trinkets carrying supporter cells -> settles unsupported chains ->
 repairs out-of-bounds records. Item identity, counts and room membership
 are always exact.
+
+## Addendum (2026-06-11, #21): Stat colors everywhere, logo = home, summary order
+
+- The stat colors from the original onboarding legend (appeal red, comfort
+  steel blue, stimulation gold, health green, mutation purple) now live in
+  `utils/statColors.ts` and color the stats summary totals, furniture-list
+  stat values, and the auto-fill stat chips (maximize state).
+- The logo/mascot no longer opens the old onboarding overlay — it navigates
+  back to the house view. The original author's contact (baenar — X &
+  GitHub) moved into the first-run welcome screen.
+- Stats summary order matches the game: House, Attic, Rooms 1-4.

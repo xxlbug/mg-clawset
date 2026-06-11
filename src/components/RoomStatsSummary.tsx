@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import type { PlacedFurniture, StatKey } from '../types/furniture';
 import { getRoomLabel } from '../types/furniture';
 import StatIcon from './StatIcon';
+import { STAT_COLORS } from '../utils/statColors';
 
 const STATS: { key: StatKey; label: string }[] = [
   { key: 'appeal', label: 'APL' },
@@ -60,8 +61,8 @@ const countStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-function valueColor(v: number): string {
-  return v > 0 ? 'var(--accent)' : v < 0 ? 'var(--lavender-grey)' : 'var(--text-h)';
+function valueColor(v: number, stat: StatKey): string {
+  return v > 0 ? STAT_COLORS[stat] : v < 0 ? 'var(--lavender-grey)' : 'var(--text-h)';
 }
 
 function StatRow({ label, totals, count, active, highlight, onClick }: {
@@ -96,7 +97,7 @@ function StatRow({ label, totals, count, active, highlight, onClick }: {
             ...valueStyle,
             fontSize: active ? 15 : 13,
             transition: 'font-size 0.25s ease',
-            color: valueColor(totals[s.key]),
+            color: valueColor(totals[s.key], s.key),
           }}>
             {totals[s.key]}
           </span>
@@ -154,7 +155,9 @@ export default function RoomStatsSummary({ rooms, activeRoom, onActiveRoomChange
         onClick={() => onActiveRoomChange(-1)}
       />
       <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
-      {rooms.map((room, i) => {
+      {/* game order: attic on top, then the floor rooms */}
+      {[4, 0, 1, 2, 3].filter((i) => i < rooms.length).map((i) => {
+        const room = rooms[i];
         if (!isRoomUnlocked(i)) {
           return (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px', fontSize: 11, color: 'var(--text-m)', opacity: 0.55 }}>

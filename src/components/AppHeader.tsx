@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import CatMascot from './CatMascot';
+import { CatSVG } from './CatMascot';
 
 const bar: CSSProperties = {
   display: 'flex',
@@ -27,6 +27,8 @@ const loadBtn: CSSProperties = {
 export type AppView = 'house' | 'furniture';
 
 interface Props {
+  /** Logo click: back to the house overview. */
+  onHome: () => void;
   onLoadSavegame: () => void;
   hasOwnership: boolean;
   savefileName: string | null;
@@ -50,12 +52,11 @@ const tabBtn = (active: boolean): CSSProperties => ({
 });
 
 /** Persistent top bar: mascot (help), title, view tabs, always-reachable savegame import. */
-export default function AppHeader({ onLoadSavegame, hasOwnership, savefileName, reloading, view, onViewChange }: Props) {
+export default function AppHeader({ onHome, onLoadSavegame, hasOwnership, savefileName, reloading, view, onViewChange }: Props) {
   return (
     <div style={bar}>
-      {/* CatMascot renders the inline cat + click-to-open help overlay */}
-      <div style={{ width: 56, flexShrink: 0, cursor: 'pointer' }} title="Help & info">
-        <CatMascot compact onLoadSavegame={onLoadSavegame} />
+      <div style={{ width: 56, flexShrink: 0, cursor: 'pointer' }} title="Back to the house view" onClick={onHome}>
+        <CatSVG size={44} />
       </div>
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-h)', lineHeight: 1.2 }}>

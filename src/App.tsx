@@ -637,6 +637,7 @@ function App() {
       )}
       {!isMobile && (
         <AppHeader
+          onHome={() => { setView('house'); setActiveRoom(HOUSE_VIEW); }}
           onLoadSavegame={handleLoadSavegame}
           hasOwnership={hasOwnership}
           savefileName={savefileName}

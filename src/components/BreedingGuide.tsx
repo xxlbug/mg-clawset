@@ -103,7 +103,7 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
 
   const hasCats = cats.length > 0;
   const roster = useMemo(() => (hasCats ? summarizeRoster(cats) : null), [cats, hasCats]);
-  const suggestions = useMemo(() => (hasCats ? suggestFoundationPairs(cats, stim, 6) : []), [cats, hasCats, stim]);
+  const suggestions = useMemo(() => (hasCats ? suggestFoundationPairs(cats, stim, { limit: 6 }) : []), [cats, hasCats, stim]);
 
   // The "cats you need" preview uses your best real pair when a save is loaded,
   // otherwise a worked illustrative example.
@@ -238,7 +238,10 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
 
           {best && (
             <div style={{ fontSize: 13, marginBottom: 8 }}>
-              Your strongest unrelated pair: <b>{best.a.name}</b> ({best.a.sex}) × <b>{best.b.name}</b> ({best.b.sex})
+              Your strongest clean pair: <b>{best.a.name}</b> ({best.a.sex}) × <b>{best.b.name}</b> ({best.b.sex})
+              {' · '}<span style={{ color: best.riskPercent < 5 ? STATE_COLOR.locked : STATE_COLOR.reachable }}>
+                defect risk {best.riskPercent.toFixed(0)}%
+              </span>
             </div>
           )}
 
@@ -269,7 +272,7 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
             <h2 style={h2}>Your roster &amp; suggested foundation pairs</h2>
             <p style={sub}>
               {roster.total} cats in save · {roster.inHouse} in the house · {roster.males}♂ / {roster.females}♀.
-              Pairs below are the highest-coverage <b>unrelated</b> in-house matches (siblings &amp; parent/child are excluded automatically).
+              Pairs below are the highest-coverage in-house matches with offspring birth-defect risk ≤ 10% (from the game CoI formula).
             </p>
 
             {suggestions.length === 0 ? (
@@ -283,6 +286,7 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
                     <tr style={{ textAlign: 'left', color: 'var(--text-m)', fontSize: 11 }}>
                       <th style={th}>Pair</th>
                       <th style={th}>Expected 7s</th>
+                      <th style={th}>Risk%</th>
                       <th style={th}>Locked now</th>
                       <th style={th}>Missing</th>
                     </tr>
@@ -376,6 +380,7 @@ function SuggestionRow({ s }: { s: PairSuggestion }) {
         <b style={{ color: 'var(--text-h)' }}>{s.b.name}</b> <span style={{ color: 'var(--text-m)' }}>({s.b.sex})</span>
       </td>
       <td style={td}><b style={{ color: 'var(--accent)' }}>{s.coverage.coverage.toFixed(1)}/7</b></td>
+      <td style={{ ...td, color: s.riskPercent < 5 ? STATE_COLOR.locked : s.riskPercent < 20 ? STATE_COLOR.reachable : STATE_COLOR.missing }}>{s.riskPercent.toFixed(0)}%</td>
       <td style={{ ...td, color: STATE_COLOR.locked }}>{s.coverage.locked.length ? s.coverage.locked.join(', ') : '—'}</td>
       <td style={{ ...td, color: s.missing.length ? STATE_COLOR.missing : 'var(--text-m)' }}>{s.missing.length ? s.missing.join(', ') : 'none ✓'}</td>
     </tr>

@@ -54,7 +54,7 @@ describe('suggestFoundationPairs', () => {
     // related to m (shares parent 10) — must be excluded
     const fRel = cat({ sex: 'female', stats: { SPD: 7, CHA: 7, LCK: 7, CON: 7 }, parents: [10, 99], name: 'Sis' });
 
-    const pairs = suggestFoundationPairs([m, f, f2, fRel], 100, 5);
+    const pairs = suggestFoundationPairs([m, f, f2, fRel], 100, { limit: 5 });
     expect(pairs.length).toBeGreaterThan(0);
     // best pair is Dad×Mom (full coverage)
     expect(new Set([pairs[0].a.name, pairs[0].b.name])).toEqual(new Set(['Dad', 'Mom']));

@@ -5,10 +5,14 @@ import {
   pairCoverage,
   analyzeRoomsForBreeding,
   recommendBreedingRoom,
+  offspringCoi,
+  defectRiskPercent,
+  maladyBreakdown,
   TOTAL_STEPS,
   nextStep,
   PERFECT7_STAGES,
   type CatStat,
+  type Pedigreed,
 } from './breeding';
 import type { FurnitureItem, PlacedFurniture } from '../types/furniture';
 
@@ -83,6 +87,45 @@ describe('room recommendation', () => {
     const infos = analyzeRoomsForBreeding([room(99, 0), room(10, 0)], (i) => i === 1);
     expect(infos).toHaveLength(1);
     expect(infos[0].stimulation).toBe(10);
+  });
+});
+
+describe('offspringCoi', () => {
+  // Pedigree: P and Q are founders; A and B are their children (full siblings);
+  // C is unrelated; D is a child of A (parent line).
+  const byKey = new Map<number, Pedigreed>();
+  const add = (dbKey: number, parents: number[]) => byKey.set(dbKey, { dbKey, parents });
+  add(1, []); // P
+  add(2, []); // Q
+  add(3, [1, 2]); // A
+  add(4, [1, 2]); // B (sibling of A)
+  add(5, []); // C (unrelated founder)
+  add(6, [3, 5]); // D (child of A and unrelated C)
+  const g = (k: number) => byKey.get(k)!;
+
+  it('is 0 for unrelated cats', () => {
+    expect(offspringCoi(g(3), g(5), byKey)).toBeCloseTo(0);
+  });
+  it('is 0.25 for full siblings', () => {
+    expect(offspringCoi(g(3), g(4), byKey)).toBeCloseTo(0.25);
+  });
+  it('is 0.25 for parent × child', () => {
+    expect(offspringCoi(g(3), g(6), byKey)).toBeCloseTo(0.25);
+  });
+});
+
+describe('defect risk (game CoI formula)', () => {
+  it('unrelated pairs carry only the base disorder chance (~2%)', () => {
+    expect(defectRiskPercent(0)).toBeCloseTo(2, 5);
+  });
+  it('a sibling-level COI (0.25) is ~40%', () => {
+    expect(defectRiskPercent(0.25)).toBeCloseTo(40, 0);
+  });
+  it('breakdown combines disorder and part-defect independently', () => {
+    const { disorder, defect, combined } = maladyBreakdown(0.25);
+    expect(disorder).toBeCloseTo(0.04);
+    expect(defect).toBeCloseTo(0.375);
+    expect(combined).toBeCloseTo(1 - (1 - 0.04) * (1 - 0.375));
   });
 });
 

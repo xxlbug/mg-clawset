@@ -112,6 +112,101 @@ export function pairCoverage(
   return { states, locked, reachable, missing, coverage };
 }
 
+// ── Inbreeding: COI + birth-defect risk (mirrors save_parser.py) ────────────
+
+export interface Pedigreed {
+  dbKey: number;
+  parents: number[];
+}
+
+/**
+ * Generation depth per cat (0 = founder/stray, else max parent depth + 1).
+ * Used to decide which side the kinship recursion decomposes. Cycle-safe.
+ */
+export function buildGenerations<T extends Pedigreed>(byKey: Map<number, T>): Map<number, number> {
+  const gen = new Map<number, number>();
+  const inProgress = new Set<number>();
+  const calc = (key: number): number => {
+    const cached = gen.get(key);
+    if (cached !== undefined) return cached;
+    if (inProgress.has(key)) return 0; // cycle: treat as founder
+    inProgress.add(key);
+    const node = byKey.get(key);
+    let g = 0;
+    if (node) {
+      for (const p of node.parents) {
+        if (byKey.has(p)) g = Math.max(g, calc(p) + 1);
+      }
+    }
+    inProgress.delete(key);
+    gen.set(key, g);
+    return g;
+  };
+  for (const k of byKey.keys()) calc(k);
+  return gen;
+}
+
+const CYCLE = Symbol('kinship-cycle');
+
+/**
+ * Build a memoised kinship function. Kinship of two cats equals the COI of
+ * their hypothetical offspring. Mirrors `_kinship` from save_parser.py:
+ *   f(a,a) = ½(1 + f(parents))
+ *   decompose whichever cat is the more recent generation toward its parents.
+ */
+export function makeKinship<T extends Pedigreed>(byKey: Map<number, T>, gen: Map<number, number>) {
+  const memo = new Map<string, number | typeof CYCLE>();
+  const keyOf = (a: number, b: number) => (a <= b ? `${a}_${b}` : `${b}_${a}`);
+
+  const k = (a: number, b: number): number => {
+    const kk = keyOf(a, b);
+    const cached = memo.get(kk);
+    if (cached !== undefined) return cached === CYCLE ? 0 : cached;
+    memo.set(kk, CYCLE);
+
+    let val: number;
+    if (a === b) {
+      const ps = byKey.get(a)?.parents ?? [];
+      const pa = ps[0];
+      const pb = ps[1];
+      const f = pa !== undefined && pb !== undefined && byKey.has(pa) && byKey.has(pb) ? k(pa, pb) : 0;
+      val = 0.5 * (1 + f);
+    } else {
+      const ga = gen.get(a) ?? 0;
+      const gb = gen.get(b) ?? 0;
+      let sum = 0;
+      if (ga > gb) {
+        for (const p of byKey.get(a)?.parents ?? []) if (byKey.has(p)) sum += k(p, b);
+      } else {
+        for (const p of byKey.get(b)?.parents ?? []) if (byKey.has(p)) sum += k(a, p);
+      }
+      val = 0.5 * sum;
+    }
+    memo.set(kk, val);
+    return val;
+  };
+  return k;
+}
+
+/** COI of the offspring of a × b (= kinship of the parents). */
+export function offspringCoi<T extends Pedigreed>(a: T, b: T, byKey: Map<number, T>): number {
+  const gen = buildGenerations(byKey);
+  return makeKinship(byKey, gen)(a.dbKey, b.dbKey);
+}
+
+/** Birth-defect breakdown from offspring COI (game logic). */
+export function maladyBreakdown(coi: number): { disorder: number; defect: number; combined: number } {
+  const disorder = 0.02 + 0.4 * Math.min(Math.max(coi - 0.2, 0), 1);
+  const defect = coi > 0.05 ? Math.min(1.5 * coi, 1) : 0;
+  const combined = 1 - (1 - disorder) * (1 - defect);
+  return { disorder, defect, combined };
+}
+
+/** Combined birth-defect probability for an a × b offspring, as a 0–100 %. */
+export function defectRiskPercent(coi: number): number {
+  return Math.max(0, Math.min(100, maladyBreakdown(coi).combined * 100));
+}
+
 // ── Room analysis (uses the player's actual designed rooms) ─────────────────
 
 const STIM: StatKey = 'stimulation';

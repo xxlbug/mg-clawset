@@ -1,7 +1,7 @@
 // Breeding analysis over a real parsed roster: relatedness checks and
 // foundation-pair suggestions that feed the Breeding Guide.
 
-import { pairCoverage } from './breeding';
+import { pairCoverage, buildGenerations, makeKinship, defectRiskPercent } from './breeding';
 import type { CatStat, PairCoverage } from './breeding';
 import type { ParsedCat, Sex } from './catParser';
 
@@ -29,14 +29,39 @@ export interface PairSuggestion {
   coverage: PairCoverage;
   missing: CatStat[];
   related: boolean;
+  /** Offspring coefficient of inbreeding. */
+  coi: number;
+  /** Combined birth-defect probability (0–100 %), from the game CoI formula. */
+  riskPercent: number;
+}
+
+export interface SuggestOptions {
+  limit?: number;
+  /** Drop pairs whose offspring birth-defect risk exceeds this %. Default 10. */
+  maxRiskPercent?: number;
+}
+
+/** Index every cat by db_key so ancestry walks can resolve parents. */
+export function catsByKey(cats: ParsedCat[]): Map<number, ParsedCat> {
+  return new Map(cats.map((c) => [c.dbKey, c]));
 }
 
 /**
  * Rank candidate breeding pairs by projected 7-coverage at the given room
- * Stimulation. Only available (in-house), sex-compatible, unrelated pairs are
- * suggested. Returns the strongest `limit` pairs.
+ * Stimulation. Only available (in-house), sex-compatible pairs whose offspring
+ * birth-defect risk stays within `maxRiskPercent` are suggested. Each result
+ * carries its offspring COI / risk% (computed from the full pedigree, so even
+ * "Gone" ancestors count). Returns the strongest `limit` pairs.
  */
-export function suggestFoundationPairs(cats: ParsedCat[], stimulation: number, limit = 6): PairSuggestion[] {
+export function suggestFoundationPairs(
+  cats: ParsedCat[],
+  stimulation: number,
+  opts: SuggestOptions = {},
+): PairSuggestion[] {
+  const { limit = 6, maxRiskPercent = 10 } = opts;
+  const byKey = catsByKey(cats);
+  const gen = buildGenerations(byKey);
+  const kinship = makeKinship(byKey, gen);
   const pool = cats.filter(isAvailable);
   const out: PairSuggestion[] = [];
 
@@ -45,13 +70,20 @@ export function suggestFoundationPairs(cats: ParsedCat[], stimulation: number, l
       const a = pool[i];
       const b = pool[j];
       if (!sexesCompatible(a.sex, b.sex)) continue;
+      // Direct relations (parent/child, siblings) are excluded outright — this
+      // catches them even when the shared parent isn't in the roster. Deeper
+      // inbreeding is then gated by the COI-derived defect risk.
       if (isRelated(a, b)) continue;
+      const coi = kinship(a.dbKey, b.dbKey);
+      const riskPercent = defectRiskPercent(coi);
+      if (riskPercent > maxRiskPercent) continue;
       const coverage = pairCoverage(a.baseStats, b.baseStats, stimulation);
-      out.push({ a, b, coverage, missing: coverage.missing, related: false });
+      out.push({ a, b, coverage, missing: coverage.missing, related: false, coi, riskPercent });
     }
   }
 
-  out.sort((x, y) => y.coverage.coverage - x.coverage.coverage);
+  // Best coverage first; break ties toward the cleaner (lower-risk) pair.
+  out.sort((x, y) => y.coverage.coverage - x.coverage.coverage || x.riskPercent - y.riskPercent);
   return out.slice(0, limit);
 }
 

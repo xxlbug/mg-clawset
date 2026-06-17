@@ -232,6 +232,23 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
               </div>
             </div>
           </div>
+
+          {/* compact checklist — where you are / what's next, terse labels */}
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }}>
+            {PERFECT7_STAGES.flatMap((stage) => stage.steps).map((step) => {
+              const checked = done.has(step.id);
+              const isNext = next?.step.id === step.id;
+              return (
+                <span key={step.id} title={step.title}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
+                    fontWeight: isNext ? 700 : 500,
+                    color: isNext ? 'var(--accent)' : checked ? 'var(--text-m)' : 'var(--text)' }}>
+                  <span style={{ fontSize: 13 }}>{checked ? '✅' : isNext ? '➡️' : '⬜'}</span>
+                  <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{step.short}</span>
+                </span>
+              );
+            })}
+          </div>
         </div>
 
         {/* ── DETAILS (collapsed) — full method, rooms, roster ── */}

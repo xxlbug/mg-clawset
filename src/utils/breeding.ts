@@ -272,6 +272,8 @@ export function recommendBreedingRoom(infos: RoomBreedingInfo[]): RoomBreedingIn
 
 export interface GuideStep {
   id: string;
+  /** 2–4 word label for the compact progress tracker. */
+  short: string;
   title: string;
   detail: string;
 }
@@ -295,18 +297,21 @@ export const PERFECT7_STAGES: GuideStage[] = [
     steps: [
       {
         id: 's1-pairs',
+        short: 'Pick foundation pairs',
         title: 'Choose 2–3 unrelated foundation pairs',
         detail:
           'Pick pairs that are NOT family — disjoint pairs let you push several lines at once. Between the two parents you want as many stats at 7 as possible.',
       },
       {
         id: 's1-room',
+        short: 'High-Stim breeding room',
         title: 'Put each active pair in your highest-Stimulation room',
         detail:
           'Stimulation raises the odds a kitten inherits the higher parent\'s stat (and abilities). Use the room the guide recommends below; keep Comfort at 0 or above.',
       },
       {
         id: 's1-keep',
+        short: 'Keep best son + daughter',
         title: 'Keep the strongest son and daughter per pair',
         detail:
           'Save one of each sex from the best litters. Never plan to breed siblings back together — that collapses the line into inbreeding.',
@@ -326,12 +331,14 @@ export const PERFECT7_STAGES: GuideStage[] = [
     steps: [
       {
         id: 's2-rooms',
+        short: 'Split lines by room',
         title: 'Move sons and daughters into different rooms',
         detail:
           'Keep each pair\'s sons and daughters apart from each other and from their parents once they mature, so no two siblings end up as the obvious next match.',
       },
       {
         id: 's2-keeper',
+        short: 'Keeper fills a gap',
         title: 'If keeping only one kitten, keep the one raising your lowest missing stat',
         detail:
           'When space is tight, the most valuable keeper is the one that adds coverage for a stat your line is still missing at 7.',
@@ -351,12 +358,14 @@ export const PERFECT7_STAGES: GuideStage[] = [
     steps: [
       {
         id: 's3-detect',
+        short: 'Spot stalled line',
         title: 'Spot the stalled line',
         detail:
           'A line stalls when it stops gaining new 7s and your only same-line options are siblings or parents. Note exactly which stats are still missing.',
       },
       {
         id: 's3-outcross',
+        short: 'Outcross missing 7s',
         title: 'Outcross for the missing stats',
         detail:
           'Bring in a stray or unrelated breeder that holds 7 in the missing stats. Promote the kitten that keeps the old locked stats AND adds the new coverage.',
@@ -376,18 +385,21 @@ export const PERFECT7_STAGES: GuideStage[] = [
     steps: [
       {
         id: 's4-finish',
+        short: 'Finish near-perfect cat',
         title: 'Finish the line through a keeper outcross',
         detail:
           'Once a keeper is close to all 7s, use a Stage 3 rotation target to cover the last stats rather than breeding back into siblings or parents.',
       },
       {
         id: 's4-backup',
+        short: 'Opposite-sex backup',
         title: 'Keep an opposite-sex backup in a separate room',
         detail:
           'A finished 7-line survives bad rolls only if you hold a primary breeder and a backup of the opposite sex in different rooms.',
       },
       {
         id: 's4-maintain',
+        short: 'Reach 7/7, preserve',
         title: 'Maintain: preserve, don\'t inbreed',
         detail:
           'When all seven stats are covered, the goal shifts from climbing to preserving. Only bring in an unrelated stray if you need redundancy.',

@@ -119,7 +119,8 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16 }}>
-      <div style={{ maxWidth: 820, margin: '0 auto' }}>
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap', maxWidth: 1120, margin: '0 auto' }}>
+        <div style={{ flex: '1 1 520px', minWidth: 0 }}>
         {/* Intro */}
         <div style={{ marginBottom: 16 }}>
           <h1 style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-h)', margin: '0 0 4px' }}>
@@ -231,23 +232,6 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
                 {selected ? <>{selected.coverage.coverage.toFixed(1)}/{MAX_STAT}</> : `${previewCoverage.coverage.toFixed(1)}/${MAX_STAT} (example)`}
               </div>
             </div>
-          </div>
-
-          {/* compact checklist — where you are / what's next, terse labels */}
-          <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }}>
-            {PERFECT7_STAGES.flatMap((stage) => stage.steps).map((step) => {
-              const checked = done.has(step.id);
-              const isNext = next?.step.id === step.id;
-              return (
-                <span key={step.id} title={step.title}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
-                    fontWeight: isNext ? 700 : 500,
-                    color: isNext ? 'var(--accent)' : checked ? 'var(--text-m)' : 'var(--text)' }}>
-                  <span style={{ fontSize: 13 }}>{checked ? '✅' : isNext ? '➡️' : '⬜'}</span>
-                  <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{step.short}</span>
-                </span>
-              );
-            })}
           </div>
         </div>
 
@@ -385,6 +369,37 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
           Method + cat-save parsing adapted from frankieg33/MewgenicsBreedingManager (Perfect 7 Planner).
           {hasCats ? ' Roster read from your loaded savegame.' : ' Load a savegame to analyze your real cats.'}
         </p>
+        </div>
+
+        {/* ── CHECKLIST PANEL (sticky right) ── */}
+        <aside style={{ flex: '0 1 260px', minWidth: 220, position: 'sticky', top: 0, alignSelf: 'flex-start' }}>
+          <div style={{ ...card, marginBottom: 0 }}>
+            <h2 style={{ ...h2, marginBottom: 2 }}>Checklist</h2>
+            <p style={{ ...sub, marginBottom: 12 }}>{done.size}/{TOTAL_STEPS} done{hasCats ? '' : ' · load a save'}</p>
+            {PERFECT7_STAGES.map((stage) => (
+              <div key={stage.num} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-m)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+                  Stage {stage.num} · {stage.title}
+                </div>
+                {stage.steps.map((step) => {
+                  const checked = done.has(step.id);
+                  const isNext = next?.step.id === step.id;
+                  return (
+                    <div key={step.id} title={step.title}
+                      style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, lineHeight: 1.5,
+                        padding: '3px 6px', borderRadius: 6, marginBottom: 1,
+                        background: isNext ? 'var(--accent-bg)' : 'transparent',
+                        fontWeight: isNext ? 700 : 500,
+                        color: isNext ? 'var(--accent)' : checked ? 'var(--text-m)' : 'var(--text)' }}>
+                      <span style={{ fontSize: 12 }}>{checked ? '✅' : isNext ? '➡️' : '⬜'}</span>
+                      <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{step.short}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </aside>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@ import RoomDesignerWorkspace from './components/RoomDesignerWorkspace';
 import SaveImportModal from './components/SaveImportModal';
 import AppHeader from './components/AppHeader';
 import WelcomeHero from './components/WelcomeHero';
+import BreedingGuide from './components/BreedingGuide';
 import { findAllAnchored, findAnchoredPieces, wouldCollide } from './utils/anchorHelpers';
 import { autoPopulateRoomAsync, statScore } from './utils/autoPopulate';
 import type { AlgorithmKey, RoomFillPlan } from './utils/autoPopulate';
@@ -651,7 +652,13 @@ function App() {
           onViewChange={setView}
         />
       )}
-      {!isMobile && view === 'furniture' ? (
+      {!isMobile && view === 'breeding' ? (
+        <BreedingGuide
+          rooms={rooms}
+          isRoomUnlocked={isRoomUnlocked}
+          onOpenRoom={(i) => { setView('house'); setActiveRoom(i); }}
+        />
+      ) : !isMobile && view === 'furniture' ? (
         <div style={{ flex: 1, minHeight: 0, padding: 16, maxWidth: 1200, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
           <FurnitureBrowser
             items={pagedItems}

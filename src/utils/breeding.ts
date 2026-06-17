@@ -1,0 +1,320 @@
+// Breeding mechanics + the "Perfect 7" method, ported from the formulas and
+// staged plan in frankieg33/MewgenicsBreedingManager (Perfect 7 Planner).
+//
+// "Perfect 7" = a cat whose seven *base* stats are all at the maximum value of
+// 7. You get there by breeding, not buying: each kitten inherits every stat
+// from one of its two parents, so you stack parents that already hold 7s and
+// push the line until every stat is locked.
+
+import type { PlacedFurniture, StatKey } from '../types/furniture';
+import { getRoomLabel } from '../types/furniture';
+
+// ── Cat base stats (the "7") ────────────────────────────────────────────────
+
+export const CAT_STATS = ['STR', 'DEX', 'CON', 'INT', 'SPD', 'CHA', 'LCK'] as const;
+export type CatStat = (typeof CAT_STATS)[number];
+export const MAX_STAT = 7;
+
+export const CAT_STAT_LABELS: Record<CatStat, string> = {
+  STR: 'Strength',
+  DEX: 'Dexterity',
+  CON: 'Constitution',
+  INT: 'Intelligence',
+  SPD: 'Speed',
+  CHA: 'Charisma',
+  LCK: 'Luck',
+};
+
+// ── Game math (mirrors save_parser / breeding.py) ───────────────────────────
+
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
+/**
+ * Chance a kitten inherits the HIGHER parent's value for a given stat.
+ * Rises with the breeding room's Stimulation: 0.5 at stim 0, 0.6 at 50,
+ * ~0.667 at 100. Source: `_stimulation_inheritance_weight`.
+ */
+export function betterStatChance(stimulation: number): number {
+  const s = stimulation;
+  return (1 + 0.01 * s) / (2 + 0.01 * s);
+}
+
+/**
+ * Breeding-success multiplier from a room's Comfort, relative to comfort 0.
+ * Overall success = compat² · (1 + 0.1·comfort). Returns null when comfort is
+ * below -10 (the game auto-fails the attempt). Source: `breeding_success_chance`.
+ */
+export function comfortMultiplier(comfort: number): number | null {
+  if (comfort < -10) return null;
+  return 1 + 0.1 * comfort;
+}
+
+/** Ability/passive inheritance odds, also driven by Stimulation. */
+export function abilityInheritanceChances(stimulation: number) {
+  const s = stimulation;
+  return {
+    firstActive: clamp01(0.2 + 0.025 * s),
+    secondActive: clamp01(0.02 + 0.005 * s),
+    passive: clamp01(0.05 + 0.01 * s),
+  };
+}
+
+// ── Pair coverage projection ────────────────────────────────────────────────
+
+export type StatState = 'locked' | 'reachable' | 'missing';
+
+export interface PairCoverage {
+  /** Per-stat state given the two parents' values. */
+  states: Record<CatStat, StatState>;
+  /** Stats guaranteed 7 (both parents ≥ 7). */
+  locked: CatStat[];
+  /** Stats that can roll 7 (exactly one parent ≥ 7). */
+  reachable: CatStat[];
+  /** Stats no parent can pass at 7 — needs an outcross. */
+  missing: CatStat[];
+  /** Expected number of 7s in a kitten, given room stimulation (the "7s" metric). */
+  coverage: number;
+}
+
+/**
+ * Project a breeding pair's 7-coverage. `coverage` counts locked stats as 1.0
+ * and reachable stats by the better-stat chance — the same `seven_plus_total`
+ * the Perfect 7 Planner shows as "X/7". Source: `pair_projection`.
+ */
+export function pairCoverage(
+  parentA: Record<CatStat, number>,
+  parentB: Record<CatStat, number>,
+  stimulation: number,
+): PairCoverage {
+  const better = betterStatChance(stimulation);
+  const states = {} as Record<CatStat, StatState>;
+  const locked: CatStat[] = [];
+  const reachable: CatStat[] = [];
+  const missing: CatStat[] = [];
+  let coverage = 0;
+
+  for (const stat of CAT_STATS) {
+    const lo = Math.min(parentA[stat], parentB[stat]);
+    const hi = Math.max(parentA[stat], parentB[stat]);
+    if (lo >= MAX_STAT) {
+      states[stat] = 'locked';
+      locked.push(stat);
+      coverage += 1;
+    } else if (hi >= MAX_STAT) {
+      states[stat] = 'reachable';
+      reachable.push(stat);
+      coverage += better;
+    } else {
+      states[stat] = 'missing';
+      missing.push(stat);
+    }
+  }
+  return { states, locked, reachable, missing, coverage };
+}
+
+// ── Room analysis (uses the player's actual designed rooms) ─────────────────
+
+const STIM: StatKey = 'stimulation';
+const CMF: StatKey = 'comfort';
+
+export interface RoomBreedingInfo {
+  index: number;
+  label: string;
+  stimulation: number;
+  comfort: number;
+  /** betterStatChance at this room's stimulation. */
+  betterChance: number;
+  /** False when comfort < -10 (breeding auto-fails here). */
+  viable: boolean;
+  itemCount: number;
+}
+
+function roomStat(room: PlacedFurniture[], key: StatKey): number {
+  let total = 0;
+  for (const p of room) total += p.item[key];
+  return total;
+}
+
+/** Per-room breeding readout for every unlocked room. */
+export function analyzeRoomsForBreeding(
+  rooms: PlacedFurniture[][],
+  isRoomUnlocked: (i: number) => boolean,
+): RoomBreedingInfo[] {
+  const out: RoomBreedingInfo[] = [];
+  for (let i = 0; i < rooms.length; i++) {
+    if (!isRoomUnlocked(i)) continue;
+    const stimulation = roomStat(rooms[i], STIM);
+    const comfort = roomStat(rooms[i], CMF);
+    out.push({
+      index: i,
+      label: getRoomLabel(i),
+      stimulation,
+      comfort,
+      betterChance: betterStatChance(stimulation),
+      viable: comfort >= -10,
+      itemCount: rooms[i].length,
+    });
+  }
+  return out;
+}
+
+/**
+ * Pick the best room to run an active breeding pair in: highest Stimulation
+ * among viable rooms (Comfort ≥ -10), tie-broken by Comfort. Returns null when
+ * no room is viable.
+ */
+export function recommendBreedingRoom(infos: RoomBreedingInfo[]): RoomBreedingInfo | null {
+  const viable = infos.filter((r) => r.viable);
+  if (viable.length === 0) return null;
+  return viable.reduce((best, r) =>
+    r.stimulation > best.stimulation || (r.stimulation === best.stimulation && r.comfort > best.comfort)
+      ? r
+      : best,
+  );
+}
+
+// ── The Perfect 7 method (the 4-stage plan, as actionable steps) ────────────
+
+export interface GuideStep {
+  id: string;
+  title: string;
+  detail: string;
+}
+
+export interface GuideStage {
+  num: number;
+  title: string;
+  goal: string;
+  summary: string;
+  steps: GuideStep[];
+  notes: string[];
+}
+
+export const PERFECT7_STAGES: GuideStage[] = [
+  {
+    num: 1,
+    title: 'Foundation pairs',
+    goal: 'Start the cleanest unrelated lines pushing 7s.',
+    summary:
+      'Pick your best unrelated pairs and breed them in a high-Stimulation room. These are the fastest, lowest-risk lines toward full 7-base-stat coverage.',
+    steps: [
+      {
+        id: 's1-pairs',
+        title: 'Choose 2–3 unrelated foundation pairs',
+        detail:
+          'Pick pairs that are NOT family — disjoint pairs let you push several lines at once. Between the two parents you want as many stats at 7 as possible.',
+      },
+      {
+        id: 's1-room',
+        title: 'Put each active pair in your highest-Stimulation room',
+        detail:
+          'Stimulation raises the odds a kitten inherits the higher parent\'s stat (and abilities). Use the room the guide recommends below; keep Comfort at 0 or above.',
+      },
+      {
+        id: 's1-keep',
+        title: 'Keep the strongest son and daughter per pair',
+        detail:
+          'Save one of each sex from the best litters. Never plan to breed siblings back together — that collapses the line into inbreeding.',
+      },
+    ],
+    notes: [
+      'Foundation pairs are disjoint so you can work multiple lines at once.',
+      'Aim for unrelated cats: a clean line keeps inbreeding risk at 0.',
+    ],
+  },
+  {
+    num: 2,
+    title: 'Separate the lines',
+    goal: 'Keep clean branches alive instead of sibling loops.',
+    summary:
+      'Separate offspring by line and sex into different rooms. This protects multiple clean branches for the next generation instead of breeding within one family.',
+    steps: [
+      {
+        id: 's2-rooms',
+        title: 'Move sons and daughters into different rooms',
+        detail:
+          'Keep each pair\'s sons and daughters apart from each other and from their parents once they mature, so no two siblings end up as the obvious next match.',
+      },
+      {
+        id: 's2-keeper',
+        title: 'If keeping only one kitten, keep the one raising your lowest missing stat',
+        detail:
+          'When space is tight, the most valuable keeper is the one that adds coverage for a stat your line is still missing at 7.',
+      },
+    ],
+    notes: [
+      'This is the child-separation guidance: avoid collapsing into sibling breeding.',
+      'Choose one keeper line per sex, then hold backups aside for future outcrosses.',
+    ],
+  },
+  {
+    num: 3,
+    title: 'Rotate / outcross',
+    goal: 'Bring in fresh blood before a line stalls.',
+    summary:
+      'When a line is missing specific 7s, rotate in an unrelated (or lower-risk) partner that covers those stats, instead of breeding inward.',
+    steps: [
+      {
+        id: 's3-detect',
+        title: 'Spot the stalled line',
+        detail:
+          'A line stalls when it stops gaining new 7s and your only same-line options are siblings or parents. Note exactly which stats are still missing.',
+      },
+      {
+        id: 's3-outcross',
+        title: 'Outcross for the missing stats',
+        detail:
+          'Bring in a stray or unrelated breeder that holds 7 in the missing stats. Promote the kitten that keeps the old locked stats AND adds the new coverage.',
+      },
+    ],
+    notes: [
+      'Rotation is driven by which 7-stats each line is missing.',
+      'If no clean candidate exists, wait for a better founder rather than inbreeding.',
+    ],
+  },
+  {
+    num: 4,
+    title: 'Finish & maintain',
+    goal: 'Convert keepers into durable perfect cats.',
+    summary:
+      'Use your strongest keepers to finish a line at all seven 7s, then preserve it with unrelated backups instead of letting it decay into inbred maintenance.',
+    steps: [
+      {
+        id: 's4-finish',
+        title: 'Finish the line through a keeper outcross',
+        detail:
+          'Once a keeper is close to all 7s, use a Stage 3 rotation target to cover the last stats rather than breeding back into siblings or parents.',
+      },
+      {
+        id: 's4-backup',
+        title: 'Keep an opposite-sex backup in a separate room',
+        detail:
+          'A finished 7-line survives bad rolls only if you hold a primary breeder and a backup of the opposite sex in different rooms.',
+      },
+      {
+        id: 's4-maintain',
+        title: 'Maintain: preserve, don\'t inbreed',
+        detail:
+          'When all seven stats are covered, the goal shifts from climbing to preserving. Only bring in an unrelated stray if you need redundancy.',
+      },
+    ],
+    notes: [
+      'Optimize toward perfect 7-base-stat coverage, not short-term room fill.',
+      'Set your inbreeding tolerance to 0 for the cleanest possible line.',
+    ],
+  },
+];
+
+export const TOTAL_STEPS = PERFECT7_STAGES.reduce((n, s) => n + s.steps.length, 0);
+
+export const ALL_STEP_IDS: string[] = PERFECT7_STAGES.flatMap((s) => s.steps.map((st) => st.id));
+
+/** First unchecked step in plan order, or null when the plan is complete. */
+export function nextStep(done: Set<string>): { stage: GuideStage; step: GuideStep } | null {
+  for (const stage of PERFECT7_STAGES) {
+    for (const step of stage.steps) {
+      if (!done.has(step.id)) return { stage, step };
+    }
+  }
+  return null;
+}

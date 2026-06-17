@@ -24,7 +24,7 @@ const loadBtn: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-export type AppView = 'house' | 'furniture';
+export type AppView = 'house' | 'furniture' | 'breeding';
 
 interface Props {
   /** Logo click: back to the house overview. */
@@ -73,6 +73,9 @@ export default function AppHeader({ onHome, onLoadSavegame, hasOwnership, savefi
           </button>
           <button style={tabBtn(view === 'furniture')} onClick={() => onViewChange('furniture')} title="Browse and edit your furniture collection">
             🪑 Furniture
+          </button>
+          <button style={tabBtn(view === 'breeding')} onClick={() => onViewChange('breeding')} title="Perfect 7 breeding guide with room recommendations">
+            🧬 Breeding Guide
           </button>
         </div>
       )}

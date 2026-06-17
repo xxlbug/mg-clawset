@@ -23,6 +23,26 @@ function sexesCompatible(a: Sex, b: Sex): boolean {
   return a !== b;
 }
 
+// `?? []` keeps these safe against cats restored from an older localStorage
+// snapshot that predates the lover/hater fields.
+const lovers = (c: ParsedCat) => c.loverKeys ?? [];
+const haters = (c: ParsedCat) => c.haterKeys ?? [];
+
+/** Either cat hates the other — the game won't reliably breed them. */
+export function hatesEachOther(a: ParsedCat, b: ParsedCat): boolean {
+  return haters(a).includes(b.dbKey) || haters(b).includes(a.dbKey);
+}
+
+/** Both cats list each other as lovers (best breeding reliability). */
+export function mutualLovers(a: ParsedCat, b: ParsedCat): boolean {
+  return lovers(a).includes(b.dbKey) && lovers(b).includes(a.dbKey);
+}
+
+/** True when a cat is in love with someone who isn't the proposed partner. */
+function lovesSomeoneElse(cat: ParsedCat, partner: ParsedCat): boolean {
+  return lovers(cat).length > 0 && !lovers(cat).includes(partner.dbKey);
+}
+
 export interface PairSuggestion {
   a: ParsedCat;
   b: ParsedCat;
@@ -33,6 +53,10 @@ export interface PairSuggestion {
   coi: number;
   /** Combined birth-defect probability (0–100 %), from the game CoI formula. */
   riskPercent: number;
+  /** Both cats already love each other — breeds reliably. */
+  mutualLover: boolean;
+  /** At least one cat is in love with a different cat (breeds less reliably). */
+  lovesElsewhere: boolean;
 }
 
 export interface SuggestOptions {
@@ -74,16 +98,27 @@ export function suggestFoundationPairs(
       // catches them even when the shared parent isn't in the roster. Deeper
       // inbreeding is then gated by the COI-derived defect risk.
       if (isRelated(a, b)) continue;
+      // Cats that hate each other won't reliably breed — drop them.
+      if (hatesEachOther(a, b)) continue;
       const coi = kinship(a.dbKey, b.dbKey);
       const riskPercent = defectRiskPercent(coi);
       if (riskPercent > maxRiskPercent) continue;
       const coverage = pairCoverage(a.baseStats, b.baseStats, stimulation);
-      out.push({ a, b, coverage, missing: coverage.missing, related: false, coi, riskPercent });
+      const mutualLover = mutualLovers(a, b);
+      const lovesElsewhere = lovesSomeoneElse(a, b) || lovesSomeoneElse(b, a);
+      out.push({ a, b, coverage, missing: coverage.missing, related: false, coi, riskPercent, mutualLover, lovesElsewhere });
     }
   }
 
-  // Best coverage first; break ties toward the cleaner (lower-risk) pair.
-  out.sort((x, y) => y.coverage.coverage - x.coverage.coverage || x.riskPercent - y.riskPercent);
+  // Best coverage first; then prefer pairs that will actually breed: mutual
+  // lovers up, "loves someone else" down (game ±25% compatibility), then the
+  // cleaner (lower-risk) pair. Coverage stays primary — genetics first.
+  const loveRank = (s: PairSuggestion) => (s.mutualLover ? 1 : 0) - (s.lovesElsewhere ? 1 : 0);
+  out.sort((x, y) =>
+    y.coverage.coverage - x.coverage.coverage ||
+    loveRank(y) - loveRank(x) ||
+    x.riskPercent - y.riskPercent,
+  );
   return out.slice(0, limit);
 }
 

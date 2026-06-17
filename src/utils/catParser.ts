@@ -28,6 +28,8 @@ export interface ParsedCat {
   parents: number[];
   /** Lover db_keys decoded from the relationship slot. */
   loverKeys: number[];
+  /** Hater db_keys decoded from the relationship slot. */
+  haterKeys: number[];
 }
 
 class Reader {
@@ -137,6 +139,7 @@ export function parseCatBlob(
     const libido = readPersonality(raw, view, anchor, 32);
     const aggression = readPersonality(raw, view, anchor, 64);
     const loverKeys = readDbKeys(view, raw, dbKey, anchor, [48]);
+    const haterKeys = readDbKeys(view, raw, dbKey, anchor, [72]);
 
     let status: ParsedCat['status'];
     let room = '';
@@ -158,6 +161,7 @@ export function parseCatBlob(
       room,
       parents: [],
       loverKeys,
+      haterKeys,
     };
   } catch {
     return null;

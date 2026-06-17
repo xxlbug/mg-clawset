@@ -273,6 +273,7 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
             <p style={sub}>
               {roster.total} cats in save · {roster.inHouse} in the house · {roster.males}♂ / {roster.females}♀.
               Pairs below are the highest-coverage in-house matches with offspring birth-defect risk ≤ 10% (from the game CoI formula).
+              Family and cats that hate each other are excluded; mutual lovers (<span style={{ color: STATE_COLOR.locked }}>♥</span>) are preferred and a cat already in love elsewhere (<span style={{ color: STATE_COLOR.reachable }}>⚠</span>) is demoted.
             </p>
 
             {suggestions.length === 0 ? (
@@ -378,6 +379,8 @@ function SuggestionRow({ s }: { s: PairSuggestion }) {
         <b style={{ color: 'var(--text-h)' }}>{s.a.name}</b> <span style={{ color: 'var(--text-m)' }}>({s.a.sex})</span>
         {' × '}
         <b style={{ color: 'var(--text-h)' }}>{s.b.name}</b> <span style={{ color: 'var(--text-m)' }}>({s.b.sex})</span>
+        {s.mutualLover && <span title="Mutual lovers — breeds reliably" style={{ color: STATE_COLOR.locked, marginLeft: 6 }}>♥</span>}
+        {!s.mutualLover && s.lovesElsewhere && <span title="One of them is in love with another cat — breeds less reliably" style={{ color: STATE_COLOR.reachable, marginLeft: 6 }}>⚠</span>}
       </td>
       <td style={td}><b style={{ color: 'var(--accent)' }}>{s.coverage.coverage.toFixed(1)}/7</b></td>
       <td style={{ ...td, color: s.riskPercent < 5 ? STATE_COLOR.locked : s.riskPercent < 20 ? STATE_COLOR.reachable : STATE_COLOR.missing }}>{s.riskPercent.toFixed(0)}%</td>

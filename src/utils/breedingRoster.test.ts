@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { isRelated, suggestFoundationPairs, summarizeRoster, sevensCount } from './breedingRoster';
+import { isRelated, suggestFoundationPairs, summarizeRoster, sevensCount, hatesEachOther, mutualLovers } from './breedingRoster';
 import { CAT_STATS } from './breeding';
 import type { ParsedCat, Sex } from './catParser';
 import type { CatStat } from './breeding';
 
 let nextKey = 1;
-function cat(opts: { sex: Sex; stats: Partial<Record<CatStat, number>>; parents?: number[]; status?: ParsedCat['status']; name?: string }): ParsedCat {
-  const dbKey = nextKey++;
+function cat(opts: { sex: Sex; stats: Partial<Record<CatStat, number>>; parents?: number[]; status?: ParsedCat['status']; name?: string; lovers?: number[]; haters?: number[]; dbKey?: number }): ParsedCat {
+  const dbKey = opts.dbKey ?? nextKey++;
   const baseStats = {} as Record<CatStat, number>;
   for (const s of CAT_STATS) baseStats[s] = opts.stats[s] ?? 4;
   return {
@@ -22,7 +22,8 @@ function cat(opts: { sex: Sex; stats: Partial<Record<CatStat, number>>; parents?
     status: opts.status ?? 'In House',
     room: 'Floor1_Large',
     parents: opts.parents ?? [],
-    loverKeys: [],
+    loverKeys: opts.lovers ?? [],
+    haterKeys: opts.haters ?? [],
   };
 }
 
@@ -67,6 +68,45 @@ describe('suggestFoundationPairs', () => {
     const m = cat({ sex: 'male', stats: {}, status: 'Gone' });
     const f = cat({ sex: 'female', stats: {} });
     expect(suggestFoundationPairs([m, f], 50)).toHaveLength(0);
+  });
+
+  it('excludes pairs that hate each other', () => {
+    const m = cat({ sex: 'male', stats: {}, dbKey: 200 });
+    const f = cat({ sex: 'female', stats: {}, dbKey: 201, haters: [200] });
+    expect(suggestFoundationPairs([m, f], 50)).toHaveLength(0);
+  });
+
+  it('prefers mutual lovers over equal-coverage non-lovers', () => {
+    const m = cat({ sex: 'male', stats: {}, dbKey: 300, lovers: [301] });
+    const lover = cat({ sex: 'female', stats: {}, dbKey: 301, lovers: [300] });
+    const other = cat({ sex: 'female', stats: {}, dbKey: 302 });
+    const pairs = suggestFoundationPairs([m, lover, other], 50);
+    expect(pairs[0].mutualLover).toBe(true);
+    expect(new Set([pairs[0].a.dbKey, pairs[0].b.dbKey])).toEqual(new Set([300, 301]));
+  });
+
+  it('flags a pair where one cat loves someone else', () => {
+    const m = cat({ sex: 'male', stats: {}, dbKey: 400, lovers: [999] }); // loves a cat not in the pair
+    const f = cat({ sex: 'female', stats: {}, dbKey: 401 });
+    const pairs = suggestFoundationPairs([m, f], 50);
+    expect(pairs[0].lovesElsewhere).toBe(true);
+    expect(pairs[0].mutualLover).toBe(false);
+  });
+});
+
+describe('relationship helpers', () => {
+  it('hatesEachOther is symmetric', () => {
+    const a = cat({ sex: 'male', stats: {}, dbKey: 1, haters: [2] });
+    const b = cat({ sex: 'female', stats: {}, dbKey: 2 });
+    expect(hatesEachOther(a, b)).toBe(true);
+    expect(hatesEachOther(b, a)).toBe(true);
+  });
+  it('mutualLovers needs both directions', () => {
+    const a = cat({ sex: 'male', stats: {}, dbKey: 1, lovers: [2] });
+    const b = cat({ sex: 'female', stats: {}, dbKey: 2 });
+    expect(mutualLovers(a, b)).toBe(false);
+    b.loverKeys = [1];
+    expect(mutualLovers(a, b)).toBe(true);
   });
 });
 

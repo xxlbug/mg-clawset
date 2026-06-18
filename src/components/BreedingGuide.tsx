@@ -183,6 +183,17 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
                 <span>📍 <b>{selected.b.name}</b> is in <b>{prettyRoom(selected.b)}</b></span>
               </div>
 
+              {/* class / role of each parent (heritable body genetics) */}
+              {(selected.a.catClass || selected.b.catClass) && (
+                <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-m)' }}>
+                  🎭 Class: <b style={{ color: 'var(--text)' }}>{selected.a.name}</b> {selected.a.catClass || 'classless'}
+                  {' · '}<b style={{ color: 'var(--text)' }}>{selected.b.name}</b> {selected.b.catClass || 'classless'}
+                  {selected.a.catClass && selected.a.catClass === selected.b.catClass && (
+                    <span style={{ color: STATE_COLOR.locked }}> — both {selected.a.catClass}, breeds toward that role</span>
+                  )}
+                </div>
+              )}
+
               {/* where to put them */}
               <div style={{ marginTop: 12, fontSize: 13 }}>
                 {recommended ? (
@@ -309,9 +320,9 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
               </p>
             )}
             <p style={{ fontSize: 12, color: 'var(--text-m)', margin: '8px 0 0' }}>
-              <b>Body genetics:</b> head/body shapes also inherit (triangle heads lean Intelligence/mage,
-              square heads lean Defense/tank) — pick parents whose shapes match the role you want.
-              The guide tracks the seven base stats only; shape data isn't parsed from the save yet.
+              <b>Body genetics:</b> a cat's <b>class</b> and head/body shapes are heritable too — pick parents
+              of the role you want (e.g. Mage for INT, Tank for defense). The guide now reads each cat's class
+              and shape from your save: classes show on the breed-next pair and in Top breeders above.
             </p>
 
             {/* cats you need — coverage grid for the selected pair */}
@@ -370,7 +381,7 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
                   {roster.topBreeders.map((c) => (
                     <span key={c.dbKey} title={CAT_STATS.map((st) => `${st} ${c.baseStats[st]}`).join(' · ')}
                       style={{ fontSize: 12, padding: '4px 10px', borderRadius: 6, background: 'var(--social-bg)', border: '1px solid var(--border)' }}>
-                      <b>{c.name}</b> <span style={{ color: 'var(--text-m)' }}>{c.sex} · {sevensCount(c)}×7 · {prettyRoom(c)}</span>
+                      <b>{c.name}</b> <span style={{ color: 'var(--text-m)' }}>{c.sex} · {sevensCount(c)}×7{c.catClass ? ` · ${c.catClass}` : ''} · {prettyRoom(c)}</span>
                     </span>
                   ))}
                 </div>

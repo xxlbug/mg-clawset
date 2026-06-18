@@ -24,6 +24,12 @@ export interface ParsedCat {
   libido: number | null;
   status: 'In House' | 'Adventure' | 'Gone';
   room: string; // game room key (Floor1_Large…) or ''
+  /** Heritable head-shape part id (T[8]); 0/unknown when unreadable. */
+  headShape: number;
+  /** Heritable body-shape part id (T[3]); 0/unknown when unreadable. */
+  bodyShape: number;
+  /** Cat class / role (Mage, Tank…); '' when classless ("Colorless") or unreadable. */
+  catClass: string;
   /** Parent db_keys from the pedigree blob (authoritative), if known. */
   parents: number[];
   /** Lover db_keys decoded from the relationship slot. */
@@ -116,7 +122,13 @@ export function parseCatBlob(
     r.str(); // collar
     r.u32();
     r.skip(64);
-    for (let i = 0; i < 72; i++) r.u32(); // visual mutation table T[72]
+    // Visual mutation table T[72]: heritable appearance part ids. We keep the
+    // two that carry breeding meaning — body shape (T[3]) and head shape (T[8]),
+    // the latter correlates with class lean (e.g. pyramid→INT, square→DEF).
+    const T: number[] = [];
+    for (let i = 0; i < 72; i++) T.push(r.u32());
+    const bodyShape = T[3] ?? 0;
+    const headShape = T[8] ?? 0;
 
     for (let i = 0; i < 3; i++) r.u32(); // gender token fields
     const rawGender = r.str();
@@ -159,6 +171,9 @@ export function parseCatBlob(
       libido,
       status,
       room,
+      headShape,
+      bodyShape,
+      catClass: parseCatClass(raw, view),
       parents: [],
       loverKeys,
       haterKeys,
@@ -166,6 +181,29 @@ export function parseCatBlob(
   } catch {
     return null;
   }
+}
+
+/**
+ * The cat's class name lives near the blob end: the string ends exactly 115
+ * bytes before the blob end, stored as `u32 length + u32 zero-pad + utf-8 name`.
+ * Scan plausible lengths for that prefix. "Colorless" means no class.
+ */
+export function parseCatClass(raw: Uint8Array, view: DataView): string {
+  try {
+    const end = raw.length - 115;
+    for (let len = 3; len < 30; len++) {
+      const prefix = end - len - 8;
+      if (prefix < 0) break;
+      if (prefix + 8 + len > raw.length) continue;
+      const length = view.getUint32(prefix, true);
+      const zero = view.getUint32(prefix + 4, true);
+      if (length === len && zero === 0) {
+        const name = UTF8.decode(raw.subarray(prefix + 8, prefix + 8 + len));
+        return name === 'Colorless' ? '' : name;
+      }
+    }
+  } catch { /* best-effort */ }
+  return '';
 }
 
 function normalizeGender(raw: string): Sex {

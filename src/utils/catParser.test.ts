@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { lz4DecompressBlock } from './lz4';
-import { parseHouseState, parseAdventureKeys } from './catParser';
+import { parseHouseState, parseAdventureKeys, parseCatClass } from './catParser';
 
 describe('lz4DecompressBlock', () => {
   it('handles a literal-only block', () => {
@@ -57,5 +57,34 @@ describe('parseAdventureKeys', () => {
     u32(view, 12, 99); // high = cat key
     const keys = parseAdventureKeys(buf);
     expect(keys.has(99)).toBe(true);
+  });
+});
+
+describe('parseCatClass', () => {
+  // Build a blob whose class string (u32 len + u32 zero + utf-8) ends exactly
+  // 115 bytes before the end, matching the in-game layout.
+  function blobWithClass(name: string): Uint8Array {
+    const enc = new TextEncoder().encode(name);
+    const buf = new Uint8Array(8 + enc.length + 115);
+    const view = new DataView(buf.buffer);
+    u32(view, 0, enc.length); // length prefix
+    u32(view, 4, 0);          // zero pad
+    buf.set(enc, 8);          // name; string ends at 8+len, then 115 tail bytes
+    return buf;
+  }
+
+  it('reads the class name from the fixed tail offset', () => {
+    const buf = blobWithClass('Necromancer');
+    expect(parseCatClass(buf, new DataView(buf.buffer))).toBe('Necromancer');
+  });
+
+  it('treats "Colorless" as classless', () => {
+    const buf = blobWithClass('Colorless');
+    expect(parseCatClass(buf, new DataView(buf.buffer))).toBe('');
+  });
+
+  it('returns empty when no class prefix is present', () => {
+    const buf = new Uint8Array(150); // all zeros, no valid length/zero prefix
+    expect(parseCatClass(buf, new DataView(buf.buffer))).toBe('');
   });
 });

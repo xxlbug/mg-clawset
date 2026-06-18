@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { PlacedFurniture } from '../types/furniture';
 import StatIcon from './StatIcon';
+import CatAvatar from './CatAvatar';
 import {
   PERFECT7_STAGES,
   TOTAL_STEPS,
@@ -157,12 +158,20 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
 
           {selected ? (
             <>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
-                <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-h)' }}>
-                  {selected.a.name} <span style={{ color: 'var(--text-m)', fontWeight: 600 }}>({selected.a.sex})</span>
-                  {'  ×  '}
-                  {selected.b.name} <span style={{ color: 'var(--text-m)', fontWeight: 600 }}>({selected.b.sex})</span>
-                </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <CatAvatar cat={selected.a} size={48} />
+                  <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-h)' }}>
+                    {selected.a.name} <span style={{ color: 'var(--text-m)', fontWeight: 600, fontSize: 14 }}>({selected.a.sex})</span>
+                  </span>
+                </div>
+                <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-m)' }}>×</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <CatAvatar cat={selected.b} size={48} />
+                  <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-h)' }}>
+                    {selected.b.name} <span style={{ color: 'var(--text-m)', fontWeight: 600, fontSize: 14 }}>({selected.b.sex})</span>
+                  </span>
+                </div>
                 {selected.mutualLover && <span title="Mutual lovers — breeds reliably" style={{ color: STATE_COLOR.locked, fontSize: 18 }}>♥</span>}
                 {!selected.mutualLover && selected.lovesElsewhere && <span title="One loves another cat — less reliable" style={{ color: STATE_COLOR.reachable, fontSize: 16 }}>⚠</span>}
               </div>

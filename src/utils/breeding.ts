@@ -268,6 +268,19 @@ export function recommendBreedingRoom(infos: RoomBreedingInfo[]): RoomBreedingIn
   );
 }
 
+/**
+ * Stimulation a room needs to count as a *dependable* breeding den, not merely
+ * a viable one. At stim 50 the better-stat chance is 60%; below that, kittens
+ * inherit the weaker parent nearly as often as the stronger, so the line barely
+ * advances. A den you commit your breeding program to should clear this bar.
+ */
+export const DEPENDABLE_DEN_STIM = 50;
+
+/** A room worth running the whole breeding program in: viable and stimulating. */
+export function isDependableDen(info: RoomBreedingInfo | null): boolean {
+  return !!info && info.viable && info.stimulation >= DEPENDABLE_DEN_STIM;
+}
+
 // ── The Perfect 7 method (the 4-stage plan, as actionable steps) ────────────
 
 export interface GuideStep {
@@ -379,9 +392,9 @@ export const PERFECT7_STAGES: GuideStage[] = [
   {
     num: 4,
     title: 'Finish & maintain',
-    goal: 'Convert keepers into durable perfect cats.',
+    goal: 'Turn keepers into a self-replenishing perfect line.',
     summary:
-      'Use your strongest keepers to finish a line at all seven 7s, then preserve it with unrelated backups instead of letting it decay into inbred maintenance.',
+      'Use your strongest keepers to finish a line at all seven 7s, then keep it producing: a maxed cat of each sex and live unrelated pairs in a dependable den, instead of letting it decay into inbred maintenance.',
     steps: [
       {
         id: 's4-finish',
@@ -399,10 +412,10 @@ export const PERFECT7_STAGES: GuideStage[] = [
       },
       {
         id: 's4-maintain',
-        short: 'Reach 7/7, preserve',
-        title: 'Maintain: preserve, don\'t inbreed',
+        short: 'Self-replenishing stable',
+        title: 'Maintain: a stable that replenishes itself',
         detail:
-          'When all seven stats are covered, the goal shifts from climbing to preserving. Only bring in an unrelated stray if you need redundancy.',
+          'A perfect line is only safe when it can reproduce itself: keep a maxed cat of each sex and at least two live unrelated pairs, all breeding in a dependable den. A single perfect cat is a milestone, not a finished program — bring in an unrelated stray whenever your redundancy drops.',
       },
     ],
     notes: [

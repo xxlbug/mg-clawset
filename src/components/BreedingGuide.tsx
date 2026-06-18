@@ -8,6 +8,7 @@ import {
   nextStep,
   analyzeRoomsForBreeding,
   recommendBreedingRoom,
+  isDependableDen,
   pairCoverage,
   betterStatChance,
   abilityInheritanceChances,
@@ -100,16 +101,28 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
     setPairIdx((p) => (p + delta + suggestions.length) % suggestions.length);
   };
 
-  // Progress is derived from the save, not ticked by hand: how many stats the
-  // best in-house cat already maxes, plus which plan steps the roster satisfies.
+  // Progress is derived from the save, not ticked by hand. It tracks a
+  // self-sustaining program — live pairs, maxed cats of both sexes, a dependable
+  // den — not just whichever single cat happens to be strongest.
   const maxSevens = useMemo(() => bestSevens(cats), [cats]);
   const bestCat = roster?.topBreeders[0] ?? null;
+  const viableRooms = useMemo(() => roomInfos.filter((r) => r.viable).length, [roomInfos]);
+  const dependableDen = isDependableDen(recommended);
+  const viablePairs = suggestions.length;
+  const eliteMales = useMemo(
+    () => cats.filter((c) => c.status === 'In House' && c.sex === 'male' && sevensCount(c) >= 6).length,
+    [cats],
+  );
+  const eliteFemales = useMemo(
+    () => cats.filter((c) => c.status === 'In House' && c.sex === 'female' && sevensCount(c) >= 6).length,
+    [cats],
+  );
   const done = useMemo(
-    () => deriveCompletedSteps(cats, suggestions, !!recommended),
-    [cats, suggestions, recommended],
+    () => deriveCompletedSteps(cats, suggestions, { dependableDen, viableRooms }),
+    [cats, suggestions, dependableDen, viableRooms],
   );
   const next = nextStep(done);
-  const pct7 = Math.round((maxSevens / MAX_STAT) * 100);
+  const pctSteps = Math.round((done.size / TOTAL_STEPS) * 100);
 
   // "Cats you need" coverage grid: your selected pair, or the worked example.
   const previewA = selected ? selected.a.baseStats : EXAMPLE_A;
@@ -127,8 +140,8 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
             🧬 Breeding Guide — Perfect 7
           </h1>
           <p style={{ fontSize: 13, color: 'var(--text-m)', margin: 0, lineHeight: 1.5 }}>
-            Goal: one cat with all seven base stats at {MAX_STAT}. Load your save and the guide
-            tells you which two cats to breed next.
+            Goal: a self-sustaining stable — maxed cats of both sexes and a dependable breeding
+            den, not one lucky cat. Load your save and the guide tells you which two to breed next.
           </p>
         </div>
 
@@ -208,30 +221,23 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
           )}
         </div>
 
-        {/* ── PROGRESS — best cat + this pair's kittens ── */}
+        {/* ── PROGRESS — stable health, not just the best cat ── */}
         <div style={card}>
-          <h2 style={h2}>Progress to Perfect 7</h2>
+          <h2 style={h2}>Stable &amp; den progress</h2>
           <p style={sub}>
             {hasCats
-              ? <>Best cat maxes <b>{maxSevens}/{MAX_STAT}</b> stats. {done.size}/{TOTAL_STEPS} method steps satisfied (auto-tracked from your save).</>
+              ? <><b>{done.size}/{TOTAL_STEPS}</b> method steps satisfied — auto-tracked from your save. Goal is a stable that keeps producing, not a single lucky cat.</>
               : <>Load a save to track progress automatically — no checkboxes to tick.</>}
           </p>
           <div style={{ height: 10, background: 'var(--bg)', borderRadius: 6, overflow: 'hidden', marginBottom: 14, border: '1px solid var(--border)' }}>
-            <div style={{ width: `${pct7}%`, height: '100%', background: 'var(--accent)', transition: 'width .3s ease' }} />
+            <div style={{ width: `${pctSteps}%`, height: '100%', background: 'var(--accent)', transition: 'width .3s ease' }} />
           </div>
           <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 13 }}>
-            <div>
-              <div style={{ color: 'var(--text-m)', fontSize: 11 }}>Closest cat you have</div>
-              <div style={{ fontWeight: 700, color: 'var(--text-h)' }}>
-                {bestCat ? <>{bestCat.name} — {maxSevens}/{MAX_STAT} maxed</> : '—'}
-              </div>
-            </div>
-            <div>
-              <div style={{ color: 'var(--text-m)', fontSize: 11 }}>This pair's kittens (expected)</div>
-              <div style={{ fontWeight: 700, color: 'var(--accent)' }}>
-                {selected ? <>{selected.coverage.coverage.toFixed(1)}/{MAX_STAT}</> : `${previewCoverage.coverage.toFixed(1)}/${MAX_STAT} (example)`}
-              </div>
-            </div>
+            <Metric label="Closest cat" value={bestCat ? `${bestCat.name} · ${maxSevens}/${MAX_STAT}` : '—'} />
+            <Metric label="Live unrelated pairs" value={hasCats ? String(viablePairs) : '—'} ok={viablePairs >= 2} warn={viablePairs < 1} />
+            <Metric label="Maxed ♂ / ♀ (6+×7)" value={hasCats ? `${eliteMales} / ${eliteFemales}` : '—'} ok={eliteMales >= 1 && eliteFemales >= 1} warn={hasCats && eliteMales + eliteFemales === 0} />
+            <Metric label="Dependable den" value={!hasCats && !roomInfos.length ? '—' : dependableDen ? 'yes' : viableRooms ? 'low stim' : 'none'} ok={dependableDen} warn={!dependableDen} />
+            <Metric label="This pair's kittens" value={selected ? `${selected.coverage.coverage.toFixed(1)}/${MAX_STAT}` : `${previewCoverage.coverage.toFixed(1)}/${MAX_STAT} (ex.)`} accent />
           </div>
         </div>
 
@@ -401,6 +407,17 @@ export default function BreedingGuide({ rooms, isRoomUnlocked, cats, onOpenRoom,
           </div>
         </aside>
       </div>
+    </div>
+  );
+}
+
+/** One labelled stat in the stable-health row. `ok` tints it green, `warn` red. */
+function Metric({ label, value, ok, warn, accent }: { label: string; value: string; ok?: boolean; warn?: boolean; accent?: boolean }) {
+  const color = accent ? 'var(--accent)' : ok ? STATE_COLOR.locked : warn ? STATE_COLOR.missing : 'var(--text-h)';
+  return (
+    <div>
+      <div style={{ color: 'var(--text-m)', fontSize: 11 }}>{label}</div>
+      <div style={{ fontWeight: 700, color }}>{value}</div>
     </div>
   );
 }

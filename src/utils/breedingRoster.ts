@@ -1,7 +1,7 @@
 // Breeding analysis over a real parsed roster: relatedness checks and
 // foundation-pair suggestions that feed the Breeding Guide.
 
-import { pairCoverage, buildGenerations, makeKinship, defectRiskPercent } from './breeding';
+import { pairCoverage, buildGenerations, makeKinship, defectRiskPercent, PERFECT7_STAGES } from './breeding';
 import type { CatStat, PairCoverage } from './breeding';
 import type { ParsedCat, Sex } from './catParser';
 
@@ -152,39 +152,68 @@ export function bestSevens(cats: ParsedCat[]): number {
   return inHouse.reduce((m, c) => Math.max(m, sevensCount(c)), 0);
 }
 
+/** Rooms the player has actually built for breeding, and whether the best of
+ *  them is dependable (viable + stimulating enough to commit a program to). */
+export interface DenState {
+  /** A viable den with enough Stimulation to be worth breeding in. */
+  dependableDen: boolean;
+  /** How many viable rooms exist — i.e. how many lines can run in parallel. */
+  viableRooms: number;
+}
+
 /**
- * Best-effort, data-driven progress: which Perfect-7 plan steps the save state
- * already satisfies, so the guide can auto-track the "next step" instead of
- * making the player tick boxes. These are heuristics over the loaded roster
- * (step ids match PERFECT7_STAGES in breeding.ts).
+ * Data-driven progress: which Perfect-7 plan steps the save state satisfies, so
+ * the guide auto-tracks the "next step" instead of making the player tick boxes.
+ *
+ * Two design choices keep this honest and aimed at the real goal — a stable
+ * that keeps producing quality cats, served by a dependable den:
+ *  - Predicates measure program *capacity to replenish* (live unrelated pairs,
+ *    maxed cats of BOTH sexes, parallel viable rooms, a stimulating den), not
+ *    "do you happen to own one strong cat".
+ *  - Steps are credited strictly in plan order: a step counts only when every
+ *    earlier step also holds. So nextStep() always points at the genuine next
+ *    action and the checklist never shows a late ✅ above an early ⬜.
  */
 export function deriveCompletedSteps(
   cats: ParsedCat[],
   suggestions: PairSuggestion[],
-  hasViableRoom: boolean,
+  den: DenState,
 ): Set<string> {
-  const done = new Set<string>();
   const inHouse = cats.filter(isAvailable);
-  const strong = (sex: Sex) => inHouse.filter((c) => c.sex === sex && sevensCount(c) >= 4);
-  const elite = (sex: Sex) => inHouse.filter((c) => c.sex === sex && sevensCount(c) >= 6);
-  const rooms = new Set(inHouse.map((c) => c.room).filter(Boolean));
+  const perSex = (sex: Sex, min: number) =>
+    inHouse.filter((c) => c.sex === sex && sevensCount(c) >= min).length;
+  // suggestions are coverage-sorted, so [0] is the strongest pair available now.
   const best = suggestions[0];
+  const viablePairs = suggestions.length;
   const max = bestSevens(cats);
+  const eliteBothSexes = perSex('male', 6) >= 1 && perSex('female', 6) >= 1;
 
-  // Stage 1 — foundation pairs in a good room, keepers of each sex.
-  if (suggestions.length > 0) done.add('s1-pairs');
-  if (hasViableRoom) done.add('s1-room');
-  if (strong('male').length >= 1 && strong('female').length >= 1) done.add('s1-keep');
-  // Stage 2 — lines separated across rooms; a near-complete keeper pair.
-  if (rooms.size >= 2) done.add('s2-rooms');
-  if (best && best.missing.length <= 1) done.add('s2-keeper');
-  // Stage 3 — strong enough to see gaps; a pair that already covers every 7.
-  if (max >= 5) done.add('s3-detect');
-  if (best && best.missing.length === 0) done.add('s3-outcross');
-  // Stage 4 — finishing: a near-perfect cat, an opposite-sex backup, a perfect 7.
-  if (max >= 6) done.add('s4-finish');
-  if (elite('male').length >= 1 && elite('female').length >= 1 && rooms.size >= 2) done.add('s4-backup');
-  if (max >= 7) done.add('s4-maintain');
+  const raw: Record<string, boolean> = {
+    // Stage 1 — at least one clean pair, a dependable den, a keeper of each sex.
+    's1-pairs': viablePairs >= 1,
+    's1-room': den.dependableDen,
+    's1-keep': perSex('male', 4) >= 1 && perSex('female', 4) >= 1,
+    // Stage 2 — capacity to run lines in parallel; a near-complete keeper pair.
+    's2-rooms': den.viableRooms >= 2,
+    's2-keeper': !!best && best.missing.length <= 1,
+    // Stage 3 — strong enough to read gaps; a pair that already covers every 7.
+    's3-detect': max >= 5,
+    's3-outcross': !!best && best.missing.length === 0,
+    // Stage 4 — a near-perfect cat, an elite of BOTH sexes, then a sustained
+    // finish: a maxed cat of each sex plus ≥2 live pairs so the line replenishes.
+    's4-finish': max >= 6,
+    's4-backup': eliteBothSexes,
+    's4-maintain': max >= 7 && eliteBothSexes && viablePairs >= 2,
+  };
 
+  // Walk the plan in order; stop at the first unmet step. Everything before it
+  // is "done", that step is what nextStep() will surface, nothing past it counts.
+  const done = new Set<string>();
+  for (const stage of PERFECT7_STAGES) {
+    for (const step of stage.steps) {
+      if (!raw[step.id]) return done;
+      done.add(step.id);
+    }
+  }
   return done;
 }

@@ -144,25 +144,54 @@ describe('bestSevens', () => {
 });
 
 describe('deriveCompletedSteps', () => {
+  const PERFECT = { STR: 7, DEX: 7, CON: 7, INT: 7, SPD: 7, CHA: 7, LCK: 7 } as const;
+
   it('marks nothing for an empty roster', () => {
-    expect(deriveCompletedSteps([], [], false).size).toBe(0);
+    expect(deriveCompletedSteps([], [], { dependableDen: false, viableRooms: 0 }).size).toBe(0);
   });
 
-  it('marks foundation steps once pairs and a room exist', () => {
+  it('marks foundation steps once pairs and a dependable den exist', () => {
     const m = cat({ sex: 'male', stats: { STR: 7, DEX: 7, CON: 7, INT: 7 }, parents: [10, 11] });
     const f = cat({ sex: 'female', stats: { SPD: 7, CHA: 7, LCK: 7, CON: 7 }, parents: [12, 13], room: 'RoomB' });
     const pairs = suggestFoundationPairs([m, f], 100);
-    const done = deriveCompletedSteps([m, f], pairs, true);
-    expect(done.has('s1-pairs')).toBe(true);  // a pair exists
-    expect(done.has('s1-room')).toBe(true);    // viable room passed in
+    const done = deriveCompletedSteps([m, f], pairs, { dependableDen: true, viableRooms: 2 });
+    expect(done.has('s1-pairs')).toBe(true);   // a pair exists
+    expect(done.has('s1-room')).toBe(true);    // dependable den passed in
     expect(done.has('s1-keep')).toBe(true);    // a strong male + female in house
-    expect(done.has('s2-rooms')).toBe(true);   // cats span two rooms
+    expect(done.has('s2-rooms')).toBe(true);   // two viable rooms = parallel lines
+    expect(done.has('s3-detect')).toBe(false); // best cat only maxes 4 stats (< 5)
   });
 
-  it('marks the finish/maintain steps when a perfect cat is in house', () => {
-    const perfect = cat({ sex: 'male', stats: { STR: 7, DEX: 7, CON: 7, INT: 7, SPD: 7, CHA: 7, LCK: 7 } });
-    const done = deriveCompletedSteps([perfect], [], true);
-    expect(done.has('s4-finish')).toBe(true);   // max sevens ≥ 6
-    expect(done.has('s4-maintain')).toBe(true); // max sevens = 7
+  it('is monotonic: an unmet early step blocks satisfiable later ones', () => {
+    // Strong cats and a live pair, but NO dependable den → stalls at s1-room.
+    const m = cat({ sex: 'male', stats: PERFECT, parents: [10, 11] });
+    const f = cat({ sex: 'female', stats: PERFECT, parents: [12, 13], room: 'RoomB' });
+    const pairs = suggestFoundationPairs([m, f], 100);
+    const done = deriveCompletedSteps([m, f], pairs, { dependableDen: false, viableRooms: 2 });
+    expect(done.has('s1-pairs')).toBe(true);
+    expect(done.has('s1-room')).toBe(false);  // no den
+    expect(done.has('s1-keep')).toBe(false);  // satisfiable, but gated by s1-room
+    expect(done.has('s4-finish')).toBe(false);
+  });
+
+  it('does not finish the plan from a single lucky cat', () => {
+    const perfect = cat({ sex: 'male', stats: PERFECT });
+    const done = deriveCompletedSteps([perfect], [], { dependableDen: false, viableRooms: 0 });
+    expect(done.has('s1-pairs')).toBe(false);    // no partner → no pair
+    expect(done.has('s4-maintain')).toBe(false); // owning one 7/7 cat is not a finished program
+  });
+
+  it('completes the plan only when the stable can replenish itself', () => {
+    // A maxed cat of each sex, two unrelated lines, a den, parallel rooms.
+    const m = cat({ sex: 'male', stats: PERFECT, parents: [10, 11] });
+    const f = cat({ sex: 'female', stats: PERFECT, parents: [12, 13], room: 'RoomB' });
+    const m2 = cat({ sex: 'male', stats: PERFECT, parents: [14, 15] });
+    const f2 = cat({ sex: 'female', stats: PERFECT, parents: [16, 17], room: 'RoomC' });
+    const cats = [m, f, m2, f2];
+    const pairs = suggestFoundationPairs(cats, 100);
+    expect(pairs.length).toBeGreaterThanOrEqual(2); // multiple live unrelated pairs
+    const done = deriveCompletedSteps(cats, pairs, { dependableDen: true, viableRooms: 3 });
+    expect(done.has('s4-backup')).toBe(true);    // elite of both sexes
+    expect(done.has('s4-maintain')).toBe(true);  // + ≥2 live pairs → self-replenishing
   });
 });

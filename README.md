@@ -35,6 +35,17 @@ Each stat is represented by an icon in the column headers and room summary:
 - **Stats summary** at the top shows the room's total Appeal, Comfort, Stimulation, Health, and Mutation.
 - Room layout is saved in local storage and persists across sessions.
 
+### Breeding Guide (Perfect 7)
+
+- Open the **🧬 Breeding Guide** tab in the header.
+- A step-by-step walkthrough of the **Perfect 7** method — breeding a cat whose seven base stats (STR, DEX, CON, INT, SPD, CHA, LCK) are all at the max value of 7.
+- **Next step** — always shows the single next action to take, plus the recommended room to breed in.
+- **Total progress** — the full 4-stage / multi-step plan with a saved checklist (`X/N steps complete`).
+- **Room guidance** — reads the Stimulation and Comfort you've designed into each room and recommends the best breeding room (high Stimulation, Comfort ≥ 0). Jump straight to a room in the designer.
+- **Cats you need** — which stats are *locked*, *reachable*, or *missing* at 7 for a pair, with expected 7s-per-kitten at your room's Stimulation.
+- **Reads your real cats** — when you load a savegame, the guide parses every cat (name, sex, the seven base stats, room, ancestry) and ranks your strongest in-house foundation pairs. Siblings and parent/child are excluded outright; deeper inbreeding is gated by an offspring **birth-defect risk %** computed from the game's coefficient-of-inbreeding (CoI) formula, shown per pair. Cats that **hate** each other are excluded, **mutual lovers** (♥) are preferred, and a cat already in love elsewhere (⚠) is demoted. Without a save it shows a worked example.
+- Breeding math (inheritance odds, comfort gate) and the cat-blob parser are ported from [frankieg33/MewgenicsBreedingManager](https://github.com/frankieg33/MewgenicsBreedingManager)'s Perfect 7 Planner / save parser.
+
 ### Import from Save File
 
 - Click **"Import from savefile"** at the bottom of the furniture list.

@@ -9,13 +9,15 @@ import RoomDesignerWorkspace from './components/RoomDesignerWorkspace';
 import SaveImportModal from './components/SaveImportModal';
 import AppHeader from './components/AppHeader';
 import WelcomeHero from './components/WelcomeHero';
+import BreedingGuide from './components/BreedingGuide';
 import { findAllAnchored, findAnchoredPieces, wouldCollide } from './utils/anchorHelpers';
-import { autoPopulateRoomAsync, statScore } from './utils/autoPopulate';
+import { autoPopulateRoomAsync, autoPopulateRoom, statScore } from './utils/autoPopulate';
 import type { AlgorithmKey, RoomFillPlan } from './utils/autoPopulate';
 import type { AppView } from './components/AppHeader';
 import useIsMobile from './hooks/useIsMobile';
 import { parseSavegame } from './utils/savegame';
 import type { HouseInfo, SavedPlacement } from './utils/savegame';
+import type { ParsedCat } from './utils/catParser';
 import { saveSavefileHandle, loadSavefileHandle, readRememberedSavefile } from './utils/savefileHandle';
 import { applyRoomPlacements } from './utils/placementImport';
 
@@ -74,6 +76,7 @@ const IDOL_RE = /special_\w*(idol)/i;
 const idolItems = allFurniture.filter((it) => IDOL_RE.test(it.image_url));
 const foodBoxItem = allFurniture.find((it) => it.image_url.includes('special_foodbox')) ?? null;
 const HOUSE_UNLOCKS_KEY = 'mg-clawset-house-unlocks';
+const CATS_STORAGE_KEY = 'mg-clawset-cats';
 
 function loadHouseInfo(): HouseInfo | null {
   try {
@@ -81,6 +84,17 @@ function loadHouseInfo(): HouseInfo | null {
     if (raw) return JSON.parse(raw);
   } catch { /* ignore */ }
   return null;
+}
+
+function loadCats(): ParsedCat[] {
+  try {
+    const raw = localStorage.getItem(CATS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch { /* ignore */ }
+  return [];
 }
 
 const defaultFilters: Filters = {
@@ -104,6 +118,9 @@ const ITEMS_PER_PAGE = 50;
 const STORAGE_KEY = 'mg-clawset-ownership';
 const ROOMS_STORAGE_KEY = 'mg-clawset-rooms';
 const NUM_ROOMS = 5;
+// Per-room search rounds for one "keep searching" pass: small so passes are
+// quick and many run; the outer loop keeps the best house across all passes.
+const KEEP_PASS_ITERATIONS = 25;
 
 let nextInstanceId = 1;
 
@@ -184,10 +201,16 @@ function App() {
   const [savefileName, setSavefileName] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
   const [houseInfo, setHouseInfo] = useState<HouseInfo | null>(loadHouseInfo);
+  const [cats, setCats] = useState<ParsedCat[]>(loadCats);
   // 0..1 while an auto-fill search runs, null when idle
   const [fillProgress, setFillProgress] = useState<number | null>(null);
   // quality summary of the last auto-fill ("how close to the theoretical max?")
   const [fillReport, setFillReport] = useState<string | null>(null);
+  // live state of an unbounded "keep searching" run; null when not running
+  const [fillSearch, setFillSearch] = useState<{ passes: number; bestScore: number } | null>(null);
+  // flipped by "Use best result" to stop the keep-searching loop
+  const stopSearchRef = useRef(false);
+  const stopSearch = useCallback(() => { stopSearchRef.current = true; }, []);
   const [view, setView] = useState<AppView>('house');
 
   const isRoomUnlocked = useCallback((i: number): boolean => {
@@ -211,6 +234,13 @@ function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(ownership));
   }, [ownership]);
+
+  useEffect(() => {
+    try {
+      if (cats.length > 0) localStorage.setItem(CATS_STORAGE_KEY, JSON.stringify(cats));
+      else localStorage.removeItem(CATS_STORAGE_KEY);
+    } catch { /* roster too large for storage: keep it in memory only */ }
+  }, [cats]);
 
   useEffect(() => {
     localStorage.setItem(ROOMS_STORAGE_KEY, JSON.stringify(rooms));
@@ -347,18 +377,16 @@ function App() {
   const handleAutoPopulate = useCallback(async (config: {
     algorithm: AlgorithmKey;
     plans: RoomFillPlan[];
+    /** Run repeated full-house passes until the user stops; keep the best. */
+    keepSearching?: boolean;
   }) => {
-    const { algorithm, plans } = config;
+    const { algorithm, plans, keepSearching = false } = config;
     if (plans.length === 0) return;
     const makeInstanceId = () => `placed-${nextInstanceId++}`;
     // theorycrafting without a savegame: the whole in-game catalog is available
     const effectiveOwnership = hasOwnership
       ? ownership
       : Object.fromEntries(allFurniture.map((it) => [it.id, 9]));
-    // longer search budget is fine now that progress is visible
-    const budgetMs = algorithm === 'maximize' ? 1500 : undefined;
-    setFillProgress(0);
-    setFillReport(null);
 
     const roomCapacity = (ri: number) => {
       const cfg = getRoomConfig(ri);
@@ -369,29 +397,108 @@ function App() {
       return n;
     };
 
-    try {
-      // Rooms without a plan (locked, skipped, or simply not part of this
-      // fill) keep their content and their items stay reserved.
-      const planned = new Set(plans.map((p) => p.roomIndex));
-      const newRooms = rooms.map((room, i) => (planned.has(i) ? [] : [...room]));
-      const used: Record<string, number> = {};
-      for (const room of newRooms) {
-        for (const p of room) used[p.item.id] = (used[p.item.id] || 0) + 1;
+    // Reserved usage + theoretical-max + capacity are identical every pass:
+    // they depend only on the rooms left out of this fill and the plan weights.
+    const planned = new Set(plans.map((p) => p.roomIndex));
+    const reserved: Record<string, number> = {};
+    for (let i = 0; i < rooms.length; i++) {
+      if (planned.has(i)) continue;
+      for (const p of rooms[i]) reserved[p.item.id] = (reserved[p.item.id] || 0) + 1;
+    }
+    let upperScore = 0;
+    let capacity = 0;
+    for (const plan of plans) {
+      for (const it of allFurniture) {
+        const remaining = (effectiveOwnership[it.id] ?? 0) - (reserved[it.id] ?? 0);
+        if (remaining <= 0) continue;
+        const sc = statScore(it, plan.weights);
+        if (sc > 0) upperScore += sc * remaining;
       }
+      capacity += roomCapacity(plan.roomIndex);
+    }
+
+    // One full-house pass: fill every planned room in order, reserving items as
+    // we go. `seedBase` varies the randomized 'maximize' search between passes.
+    const fillPass = (seedBase: number) => {
+      const newRooms = rooms.map((room, i) => (planned.has(i) ? [] : [...room]));
+      const used: Record<string, number> = { ...reserved };
       let placedTotal = 0;
       let achievedScore = 0;
-      let upperScore = 0;
       let cellsUsed = 0;
-      let capacity = 0;
+      for (const plan of plans) {
+        const result = autoPopulateRoom({
+          weights: plan.weights,
+          minStats: plan.minStats,
+          mustInclude: plan.mustInclude,
+          algorithm,
+          iterations: algorithm === 'maximize' ? KEEP_PASS_ITERATIONS : undefined,
+          seed: seedBase + plan.roomIndex * 7919,
+          roomIndex: plan.roomIndex,
+          allFurniture,
+          ownership: effectiveOwnership,
+          usedInOtherRooms: { ...used },
+          makeInstanceId,
+        });
+        newRooms[plan.roomIndex] = result;
+        placedTotal += result.length;
+        for (const p of result) {
+          used[p.item.id] = (used[p.item.id] || 0) + 1;
+          achievedScore += statScore(p.item, plan.weights);
+          cellsUsed += p.item.spacesOccupied;
+        }
+      }
+      return { newRooms, placedTotal, achievedScore, cellsUsed };
+    };
+
+    const reportFor = (achievedScore: number, cellsUsed: number) => {
+      const pct = upperScore > 0 ? Math.round((achievedScore / upperScore) * 100) : 100;
+      return hasOwnership
+        ? `Score ${achievedScore} \u2014 ${pct}% of the theoretical max (every scoring copy placed, space ignored) \u00b7 ${cellsUsed}/${capacity} cells used`
+        : `Score ${achievedScore} (full catalog, no savegame) \u00b7 ${cellsUsed}/${capacity} cells used`;
+    };
+
+    setFillReport(null);
+
+    // --- Keep-searching: repeated passes until the user clicks "Use best". ---
+    if (keepSearching) {
+      stopSearchRef.current = false;
+      setFillSearch({ passes: 0, bestScore: 0 });
+      let best: ReturnType<typeof fillPass> | null = null;
+      let passes = 0;
+      try {
+        do {
+          const pass = fillPass(0x1234 + passes * 2654435761);
+          passes += 1;
+          if (pass.placedTotal > 0 && (best === null || pass.achievedScore > best.achievedScore)) {
+            best = pass;
+          }
+          setFillSearch({ passes, bestScore: best?.achievedScore ?? 0 });
+          // yield so the UI repaints and the Stop button can flip the ref
+          await new Promise((r) => setTimeout(r, 0));
+        } while (!stopSearchRef.current);
+      } finally {
+        setFillSearch(null);
+      }
+      if (!best) {
+        window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
+        return;
+      }
+      updateRooms(best.newRooms);
+      setFillReport(`${reportFor(best.achievedScore, best.cellsUsed)} \u00b7 best of ${passes} passes`);
+      return;
+    }
+
+    // --- One-shot fill with the live progress bar (default behavior). ---
+    const budgetMs = algorithm === 'maximize' ? 1500 : undefined;
+    setFillProgress(0);
+    try {
+      const newRooms = rooms.map((room, i) => (planned.has(i) ? [] : [...room]));
+      const used: Record<string, number> = { ...reserved };
+      let placedTotal = 0;
+      let achievedScore = 0;
+      let cellsUsed = 0;
       for (let pi = 0; pi < plans.length; pi++) {
         const plan = plans[pi];
-        // loose upper bound: every remaining positive-scoring copy placed, geometry ignored
-        for (const it of allFurniture) {
-          const remaining = (effectiveOwnership[it.id] ?? 0) - (used[it.id] ?? 0);
-          if (remaining <= 0) continue;
-          const sc = statScore(it, plan.weights);
-          if (sc > 0) upperScore += sc * remaining;
-        }
         const result = await autoPopulateRoomAsync({
           weights: plan.weights,
           minStats: plan.minStats,
@@ -411,18 +518,13 @@ function App() {
           achievedScore += statScore(p.item, plan.weights);
           cellsUsed += p.item.spacesOccupied;
         }
-        capacity += roomCapacity(plan.roomIndex);
       }
       if (placedTotal === 0) {
         window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
         return;
       }
       updateRooms(newRooms);
-      // % vs the catalog is meaningless when theorycrafting without a save
-      const pct = upperScore > 0 ? Math.round((achievedScore / upperScore) * 100) : 100;
-      setFillReport(hasOwnership
-        ? `Score ${achievedScore} \u2014 ${pct}% of the theoretical max (every scoring copy placed, space ignored) \u00b7 ${cellsUsed}/${capacity} cells used`
-        : `Score ${achievedScore} (full catalog, no savegame) \u00b7 ${cellsUsed}/${capacity} cells used`);
+      setFillReport(reportFor(achievedScore, cellsUsed));
     } finally {
       setFillProgress(null);
     }
@@ -445,7 +547,8 @@ function App() {
     setOwnership((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
   }, []);
 
-  const handleImportOwnership = useCallback((newOwnership: Record<string, number> | null, newHouseInfo: HouseInfo | null = null, placements: SavedPlacement[] | null = null) => {
+  const handleImportOwnership = useCallback((newOwnership: Record<string, number> | null, newHouseInfo: HouseInfo | null = null, placements: SavedPlacement[] | null = null, newCats?: ParsedCat[]) => {
+    if (newCats && newCats.length > 0) setCats(newCats);
     if (newOwnership) {
       setOwnership(newOwnership);
       // After loading a savegame, show what the player actually owns
@@ -491,9 +594,9 @@ function App() {
     try {
       const remembered = await readRememberedSavefile();
       if (remembered) {
-        const { ownership: newOwnership, houseInfo: hi, placements } = await parseSavegame(remembered.data, furnitureIdMap);
+        const { ownership: newOwnership, houseInfo: hi, placements, cats: newCats } = await parseSavegame(remembered.data, furnitureIdMap);
         if (Object.keys(newOwnership).length > 0) {
-          handleImportOwnership(newOwnership, hi, placements);
+          handleImportOwnership(newOwnership, hi, placements, newCats);
           return;
         }
       }
@@ -651,8 +754,16 @@ function App() {
           onViewChange={setView}
         />
       )}
-      {!isMobile && view === 'furniture' ? (
-        <div style={{ flex: 1, minHeight: 0, padding: 16, maxWidth: 1200, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+      {!isMobile && view === 'breeding' ? (
+        <BreedingGuide
+          rooms={rooms}
+          isRoomUnlocked={isRoomUnlocked}
+          cats={cats}
+          onOpenRoom={(i) => { setView('house'); setActiveRoom(i); }}
+          onLoadSavegame={handleLoadSavegame}
+        />
+      ) : !isMobile && view === 'furniture' ? (
+        <div style={{ flex: 1, minHeight: 0, padding: 16, width: '100%', boxSizing: 'border-box' }}>
           <FurnitureBrowser
             items={pagedItems}
             totalItems={filteredAndSorted.length}
@@ -699,6 +810,8 @@ function App() {
             foodBox={foodBoxItem && (ownership[foodBoxItem.id] || 0) > 0 ? foodBoxItem : null}
             fillProgress={fillProgress}
             fillReport={fillReport}
+            fillSearch={fillSearch}
+            onStopSearch={stopSearch}
             onEmptyRooms={(idxs) => updateRooms((prev) => prev.map((room, i) => (idxs.includes(i) ? [] : room)))}
             onUndo={canUndo ? undo : undefined}
             onRedo={canRedo ? redo : undefined}

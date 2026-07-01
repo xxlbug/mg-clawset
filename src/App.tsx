@@ -7,11 +7,12 @@ import SplitScreenContainer from './components/SplitScreenContainer';
 import FurnitureBrowser from './components/FurnitureBrowser';
 import RoomDesignerWorkspace from './components/RoomDesignerWorkspace';
 import SaveImportModal from './components/SaveImportModal';
+import TestModal from './components/TestModal';
 import AppHeader from './components/AppHeader';
 import WelcomeHero from './components/WelcomeHero';
 import BreedingGuide from './components/BreedingGuide';
 import { findAllAnchored, findAnchoredPieces, wouldCollide } from './utils/anchorHelpers';
-import { autoPopulateRoomAsync, autoPopulateRoom, statScore } from './utils/autoPopulate';
+import { autoPopulateRoomAsync, autoPopulateRoom, statScore, preAllocateItems, pushScore, isConverged } from './utils/autoPopulate';
 import type { AlgorithmKey, RoomFillPlan } from './utils/autoPopulate';
 import type { AppView } from './components/AppHeader';
 import useIsMobile from './hooks/useIsMobile';
@@ -197,9 +198,11 @@ function App() {
   const [rooms, setRooms] = useState<PlacedFurniture[][]>(loadRooms);
   const [activeRoom, setActiveRoom] = useState(HOUSE_VIEW);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [testModalOpen, setTestModalOpen] = useState(false);
   const [statsPerSpace, setStatsPerSpace] = useState(false);
   const [savefileName, setSavefileName] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
+  const [testModeNonce, setTestModeNonce] = useState(0);
   const [houseInfo, setHouseInfo] = useState<HouseInfo | null>(loadHouseInfo);
   const [cats, setCats] = useState<ParsedCat[]>(loadCats);
   // 0..1 while an auto-fill search runs, null when idle
@@ -210,7 +213,12 @@ function App() {
   const [fillSearch, setFillSearch] = useState<{ passes: number; bestScore: number } | null>(null);
   // flipped by "Use best result" to stop the keep-searching loop
   const stopSearchRef = useRef(false);
-  const stopSearch = useCallback(() => { stopSearchRef.current = true; }, []);
+  const fillAbortRef = useRef<AbortController | null>(null);
+  const stopSearch = useCallback(() => {
+    stopSearchRef.current = true;
+    fillAbortRef.current?.abort();
+  }, []);
+  const pendingTestPlansRef = useRef<RoomFillPlan[] | null>(null);
   const [view, setView] = useState<AppView>('house');
 
   const isRoomUnlocked = useCallback((i: number): boolean => {
@@ -377,16 +385,20 @@ function App() {
   const handleAutoPopulate = useCallback(async (config: {
     algorithm: AlgorithmKey;
     plans: RoomFillPlan[];
-    /** Run repeated full-house passes until the user stops; keep the best. */
-    keepSearching?: boolean;
+    /** 4-position mode: old=one-shot, standard/long/extreme=keep-searching. */
+    searchMode?: 'fast' | 'medium' | 'long' | 'extraLong';
+    /** Item ID → house-wide total cap (e.g. food box limit). */
+    itemCaps?: Record<string, number>;
+    /** V2 tunable settings; ignored by v1. */
+    v2Settings?: import('./utils/autoPopulateV2').V2Settings;
   }) => {
-    const { algorithm, plans, keepSearching = false } = config;
+    const { algorithm, plans, searchMode, v2Settings } = config;
     if (plans.length === 0) return;
     const makeInstanceId = () => `placed-${nextInstanceId++}`;
-    // theorycrafting without a savegame: the whole in-game catalog is available
+    // theorycrafting without a savegame: use zero copies (no items to place)
     const effectiveOwnership = hasOwnership
       ? ownership
-      : Object.fromEntries(allFurniture.map((it) => [it.id, 9]));
+      : {};
 
     const roomCapacity = (ri: number) => {
       const cfg = getRoomConfig(ri);
@@ -419,26 +431,106 @@ function App() {
 
     // One full-house pass: fill every planned room in order, reserving items as
     // we go. `seedBase` varies the randomized 'maximize' search between passes.
-    const fillPass = (seedBase: number) => {
+    //
+    // Items in other rooms' `mustInclude` are reserved (marked consumed) so the
+    // current room cannot steal idols/food assigned to a different room.
+    const mustIncludeReservation: Record<string, number> = {};
+    for (const plan of plans) {
+      for (const id of plan.mustInclude) {
+        mustIncludeReservation[id] = (mustIncludeReservation[id] || 0) + 1;
+      }
+    }
+
+    // Reserve surplus copies of items that appear in mustInclude across multiple
+    // rooms. If 3 food boxes are owned but the cap is 2, 1 copy is reserved
+    // globally so the total placed across the house doesn't exceed the cap.
+    // Only applies to items with an explicit house-wide cap (itemCaps) — auto
+    // mode leaves them unrestricted.
+    const globalReserved: Record<string, number> = {};
+    if (config.itemCaps) {
+      for (const [id, cap] of Object.entries(config.itemCaps)) {
+        const totalOwned = effectiveOwnership[id] ?? 0;
+        if (totalOwned > cap) globalReserved[id] = totalOwned - cap;
+      }
+    }
+
+    // Cross-room pre-allocation: items whose stat score in one room is >2x the
+    // next best are assigned exclusively to that room. This prevents strongly
+    // biased items from being consumed by a wrong room in the fill order.
+    const preAllocated = preAllocateItems(plans, allFurniture, effectiveOwnership);
+
+    // Compute keep-searching behaviour from the mode.
+    // 'fast' or undefined → one-shot fill (original behavior, single-room fallback).
+    type SearchParams = { staleLimit: number; temperature: boolean; permutations: boolean };
+    let searchParams: SearchParams | null = searchMode === 'extraLong'
+      ? { staleLimit: 3, temperature: true, permutations: true }
+      : searchMode === 'long'
+      ? { staleLimit: 15, temperature: true, permutations: false }
+      : searchMode === 'medium'
+      ? { staleLimit: 5, temperature: false, permutations: false }
+      : null;
+
+    // v2 uses one-shot with iterations from user settings; no keep-searching needed.
+    if (algorithm === 'maximize-v2') searchParams = null;
+
+    const fillPass = async (seedBase: number, roomOrder: RoomFillPlan[] = plans) => {
       const newRooms = rooms.map((room, i) => (planned.has(i) ? [] : [...room]));
-      const used: Record<string, number> = { ...reserved };
+      const used: Record<string, number> = { ...reserved, ...globalReserved };
       let placedTotal = 0;
       let achievedScore = 0;
       let cellsUsed = 0;
-      for (const plan of plans) {
-        const result = autoPopulateRoom({
+      for (const plan of roomOrder) {
+        // Items assigned to other rooms via mustInclude are off-limits here.
+        const otherReserved: Record<string, number> = {};
+        for (const [id, count] of Object.entries(mustIncludeReservation)) {
+          const forThisRoom = plan.mustInclude.includes(id) ? 1 : 0;
+          const remainingReservation = count - forThisRoom;
+          if (remainingReservation > 0) otherReserved[id] = remainingReservation;
+        }
+
+        // Items pre-allocated to other rooms are off-limits here.
+        const otherPreAllocated: Record<string, number> = {};
+        for (const [ri, allocItems] of Object.entries(preAllocated)) {
+          const roomIdx = Number(ri);
+          if (roomIdx === plan.roomIndex) continue;
+          for (const [id, count] of Object.entries(allocItems)) {
+            otherPreAllocated[id] = (otherPreAllocated[id] || 0) + count;
+          }
+        }
+
+        // Merge all reservation layers. Use additive merge for preAllocated
+        // (distinct copies) and max for otherReserved (same copy counted once).
+        const merged: Record<string, number> = { ...used };
+        for (const [id, count] of Object.entries(otherReserved)) {
+          merged[id] = Math.max(merged[id] || 0, count);
+        }
+        for (const [id, count] of Object.entries(otherPreAllocated)) {
+          merged[id] = (merged[id] || 0) + count;
+        }
+
+        const opts = {
           weights: plan.weights,
           minStats: plan.minStats,
           mustInclude: plan.mustInclude,
+          excludeItemIds: plan.excludeItemIds,
           algorithm,
-          iterations: algorithm === 'maximize' ? KEEP_PASS_ITERATIONS : undefined,
           seed: seedBase + plan.roomIndex * 7919,
           roomIndex: plan.roomIndex,
           allFurniture,
           ownership: effectiveOwnership,
-          usedInOtherRooms: { ...used },
+          usedInOtherRooms: merged,
           makeInstanceId,
-        });
+          v2Settings,
+        };
+
+        // Yield between rooms so the browser stays responsive during
+        // multi-room passes (especially v2 which can take ~1s per room).
+        if (placedTotal > 0) await new Promise((r) => setTimeout(r, 0));
+
+        const result = algorithm === 'maximize-v2'
+          ? await autoPopulateRoomAsync({ ...opts, iterations: KEEP_PASS_ITERATIONS })
+          : autoPopulateRoom(opts);
+
         newRooms[plan.roomIndex] = result;
         placedTotal += result.length;
         for (const p of result) {
@@ -459,57 +551,127 @@ function App() {
 
     setFillReport(null);
 
-    // --- Keep-searching: repeated passes until the user clicks "Use best". ---
-    if (keepSearching) {
+    // --- Keep-searching (searchMode set) vs. one-shot (single-room fill). ---
+    if (searchParams) {
+      const keepSearching = searchParams.staleLimit;
       stopSearchRef.current = false;
       setFillSearch({ passes: 0, bestScore: 0 });
-      let best: ReturnType<typeof fillPass> | null = null;
-      let passes = 0;
+
+      // generatePermutations returns all 5! orderings of plans.
+      const generatePermutations = <T,>(arr: T[]): T[][] => {
+        if (arr.length <= 1) return [arr];
+        const result: T[][] = [];
+        for (let i = 0; i < arr.length; i++) {
+          const rest = generatePermutations(arr.filter((_, j) => j !== i));
+          for (const perm of rest) result.push([arr[i], ...perm]);
+        }
+        return result;
+      };
+
+      let bestGlobal: Awaited<ReturnType<typeof fillPass>> | null = null;
+      let totalPasses = 0;
+      let usedOrders = 1;
+      const orders = searchParams.permutations
+        ? generatePermutations(plans)
+        : [plans];
+
       try {
-        do {
-          const pass = fillPass(0x1234 + passes * 2654435761);
-          passes += 1;
-          if (pass.placedTotal > 0 && (best === null || pass.achievedScore > best.achievedScore)) {
-            best = pass;
+        for (let oi = 0; oi < orders.length; oi++) {
+          if (stopSearchRef.current) break;
+          const order = orders[oi];
+          usedOrders = oi + 1;
+          let best: Awaited<ReturnType<typeof fillPass>> | null = null;
+          let stalePasses = 0;
+          const scoreWindow: number[] = [];
+
+          for (
+            let pi = 0;
+            !stopSearchRef.current && (keepSearching === 0 || stalePasses < keepSearching);
+            pi++
+          ) {
+            const pass = await fillPass(0x1234 + totalPasses * 2654435761, order);
+            totalPasses += 1;
+
+            if (pass.placedTotal > 0 && (best === null || pass.achievedScore > best.achievedScore)) {
+              best = pass;
+              stalePasses = 0;
+            } else {
+              stalePasses += 1;
+            }
+
+            // Temperature check: if enabled, exit early when improvement stalls.
+            if (searchParams.temperature && best) {
+              pushScore(scoreWindow, best.achievedScore, 10);
+              if (scoreWindow.length >= 10 && isConverged(scoreWindow, 0.01)) {
+                break;
+              }
+            }
+
+            setFillSearch({ passes: totalPasses, bestScore: best?.achievedScore ?? 0 });
+            // yield to the event loop so the UI stays responsive
+            await new Promise((r) => setTimeout(r, 0));
           }
-          setFillSearch({ passes, bestScore: best?.achievedScore ?? 0 });
-          // yield so the UI repaints and the Stop button can flip the ref
-          await new Promise((r) => setTimeout(r, 0));
-        } while (!stopSearchRef.current);
+
+          // Track best across all orders
+          if (best && (bestGlobal === null || best.achievedScore > bestGlobal.achievedScore)) {
+            bestGlobal = best;
+          }
+        }
       } finally {
         setFillSearch(null);
       }
-      if (!best) {
+
+      if (!bestGlobal) {
         window.alert('Nothing to place: no owned furniture with remaining copies scores positively for the selected stats.');
         return;
       }
-      updateRooms(best.newRooms);
-      setFillReport(`${reportFor(best.achievedScore, best.cellsUsed)} \u00b7 best of ${passes} passes`);
+      const orderLabel = searchParams.permutations ? ` \u00b7 ${usedOrders}/${orders.length} orders` : '';
+      updateRooms(bestGlobal.newRooms);
+      setFillReport(`${reportFor(bestGlobal.achievedScore, bestGlobal.cellsUsed)} \u00b7 best of ${totalPasses} passes${orderLabel}`);
       return;
     }
 
     // --- One-shot fill with the live progress bar (default behavior). ---
     const budgetMs = algorithm === 'maximize' ? 1500 : undefined;
+    stopSearchRef.current = false;
+    const controller = new AbortController();
+    fillAbortRef.current = controller;
     setFillProgress(0);
     try {
       const newRooms = rooms.map((room, i) => (planned.has(i) ? [] : [...room]));
-      const used: Record<string, number> = { ...reserved };
+      const used: Record<string, number> = { ...reserved, ...globalReserved };
       let placedTotal = 0;
       let achievedScore = 0;
       let cellsUsed = 0;
       for (let pi = 0; pi < plans.length; pi++) {
+        if (stopSearchRef.current) break;
         const plan = plans[pi];
+        // Other rooms' mustInclude items are reserved (see fillPass comment).
+        const otherReserved: Record<string, number> = {};
+        for (const [id, count] of Object.entries(mustIncludeReservation)) {
+          const forThisRoom = plan.mustInclude.includes(id) ? 1 : 0;
+          const remainingReservation = count - forThisRoom;
+          if (remainingReservation > 0) otherReserved[id] = remainingReservation;
+        }
+        const merged: Record<string, number> = { ...used };
+        for (const [id, count] of Object.entries(otherReserved)) {
+          merged[id] = Math.max(merged[id] || 0, count);
+        }
         const result = await autoPopulateRoomAsync({
           weights: plan.weights,
           minStats: plan.minStats,
           mustInclude: plan.mustInclude,
+          excludeItemIds: plan.excludeItemIds,
           algorithm,
           budgetMs,
+          iterations: v2Settings?.defaultMaximizeIterations ?? 100,
           roomIndex: plan.roomIndex,
           allFurniture,
           ownership: effectiveOwnership,
-          usedInOtherRooms: { ...used },
+          usedInOtherRooms: merged,
           makeInstanceId,
+          v2Settings,
+          signal: controller.signal,
         }, (p) => setFillProgress((pi + p.fraction) / plans.length));
         newRooms[plan.roomIndex] = result;
         placedTotal += result.length;
@@ -526,9 +688,20 @@ function App() {
       updateRooms(newRooms);
       setFillReport(reportFor(achievedScore, cellsUsed));
     } finally {
+      fillAbortRef.current = null;
       setFillProgress(null);
     }
   }, [rooms, ownership, hasOwnership, updateRooms]);
+
+  const autoFillRef = useRef(handleAutoPopulate);
+  autoFillRef.current = handleAutoPopulate;
+
+  useEffect(() => {
+    if (!pendingTestPlansRef.current) return;
+    const plans = pendingTestPlansRef.current;
+    pendingTestPlansRef.current = null;
+      autoFillRef.current({ algorithm: 'maximize', plans, searchMode: 'fast' });
+  }, [testModeNonce]);
 
   const handleSortChange = useCallback((field: SortField) => {
     setSort((prev) => ({
@@ -551,15 +724,14 @@ function App() {
     if (newCats && newCats.length > 0) setCats(newCats);
     if (newOwnership) {
       setOwnership(newOwnership);
-      // After loading a savegame, show what the player actually owns
       setFilters((prev) => ({ ...prev, onlyOwned: true }));
-      // ...and get the drawer out of the way: the house is the main view now
       setDrawerOpen(false);
     }
     if (newHouseInfo) {
       setHouseInfo(newHouseInfo);
       localStorage.setItem(HOUSE_UNLOCKS_KEY, JSON.stringify(newHouseInfo));
     }
+    const emptyRooms: PlacedFurniture[][] = Array.from({ length: NUM_ROOMS }, () => []);
     if (placements) {
       const byId = new Map(allFurniture.map((f) => [f.id, f]));
       const newRooms: PlacedFurniture[][] = Array.from({ length: NUM_ROOMS }, () => []);
@@ -573,14 +745,93 @@ function App() {
         }));
       }
       updateRooms(newRooms);
-      setActiveRoom(HOUSE_VIEW);
+    } else {
+      updateRooms(emptyRooms);
     }
+    setActiveRoom(HOUSE_VIEW);
   }, [updateRooms]);
 
   const openImportModal = useCallback(() => {
     dismissHero();
     setImportModalOpen(true);
   }, [dismissHero]);
+
+  const handleTestMode = useCallback((itemCount: number, rarePercent: number, unlockedRooms: number) => {
+    const rare: FurnitureItem[] = [];
+    const common: FurnitureItem[] = [];
+    for (const item of allFurniture) {
+      const isRare = !!item.image_url?.includes('special_')
+        || item.appeal >= 4 || item.comfort >= 4 || item.stimulation >= 4
+        || item.health >= 4 || item.mutation >= 4;
+      (isRare ? rare : common).push(item);
+    }
+
+    const rng = (max: number) => Math.floor(Math.random() * max);
+    const pick = <T,>(arr: T[], n: number): T[] => {
+      const shuffled = [...arr];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = rng(i + 1);
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return shuffled.slice(0, Math.min(n, shuffled.length));
+    };
+
+    const rareTarget = Math.round(itemCount * (rarePercent / 100));
+    const commonTarget = itemCount - rareTarget;
+
+    const ownership: Record<string, number> = {};
+
+    for (const item of pick(rare, rareTarget)) {
+      ownership[item.id] = 1;
+    }
+    for (const item of pick(common, commonTarget)) {
+      ownership[item.id] = 1;
+    }
+
+    const duplicateBudget = Math.max(1, Math.round(Object.keys(ownership).length * 0.05));
+    const candidates = Object.keys(ownership).filter((id) => {
+      const item = allFurniture.find((f) => f.id === id);
+      return item && !item.image_url?.includes('special_');
+    });
+    for (let i = 0; i < duplicateBudget && candidates.length > 0; i++) {
+      const idx = rng(candidates.length);
+      const id = candidates[idx];
+      ownership[id] = 2;
+      candidates[idx] = candidates[candidates.length - 1];
+      candidates.pop();
+    }
+
+    const newHouseInfo: HouseInfo = {
+      atticUnlocked: unlockedRooms >= 2,
+      regularRooms: Math.max(1, Math.min(unlockedRooms - 1, 4)) as 1 | 2 | 3 | 4,
+    };
+
+    const foodBoxCount = itemCount >= 150 ? 10 : Math.max(3, Math.round(3 + (itemCount / 150) * 7));
+    if (foodBoxItem) ownership[foodBoxItem.id] = foodBoxCount;
+
+    // Room index: 0=Room1, 1=Room2, 2=Room3, 3=Room4, 4=Attic
+    const ROOM_PRESET_PATTERNS: Record<number, Record<number, string>> = {
+      2: { 4: 'breeding', 0: 'storage' },
+      3: { 4: 'breeding', 0: 'storage', 1: 'fightclub' },
+      4: { 4: 'breeding', 0: 'storage', 1: 'fightclub', 2: 'mutation' },
+      5: { 4: 'breeding', 0: 'breeding', 1: 'storage', 2: 'fightclub', 3: 'mutation' },
+    };
+    const pattern = ROOM_PRESET_PATTERNS[unlockedRooms] ?? {};
+    try {
+      const raw = localStorage.getItem('clawset-designer-workspace');
+      const ws = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+      ws.roomPresets = { ...pattern };
+      for (let i = 0; i < 4; i++) {
+        if (!(i in pattern)) (ws.roomPresets as Record<string, string>)[String(i)] = 'skip';
+      }
+      if (!(4 in pattern)) (ws.roomPresets as Record<string, string>)['4'] = 'skip';
+      localStorage.setItem('clawset-designer-workspace', JSON.stringify(ws));
+    } catch { /* best-effort */ }
+
+    setTestModeNonce((v) => v + 1);
+    setTestModalOpen(false);
+    handleImportOwnership(ownership, newHouseInfo, null);
+  }, [handleImportOwnership]);
 
   const handleSavefileHandleCaptured = useCallback((handle: FileSystemFileHandle) => {
     setSavefileName(handle.name);
@@ -747,6 +998,7 @@ function App() {
         <AppHeader
           onHome={() => { setView('house'); setActiveRoom(HOUSE_VIEW); }}
           onLoadSavegame={handleLoadSavegame}
+          onTestMode={() => setTestModalOpen(true)}
           hasOwnership={hasOwnership}
           savefileName={savefileName}
           reloading={reloading}
@@ -792,6 +1044,7 @@ function App() {
       <SplitScreenContainer>
         {!isMobile && (
           <RoomDesignerWorkspace
+            key={testModeNonce}
             visible
             placed={placed}
             rooms={rooms}
@@ -806,6 +1059,7 @@ function App() {
             drawerOpen={drawerOpen}
             onToggleDrawer={() => setDrawerOpen((v) => !v)}
             isRoomUnlocked={isRoomUnlocked}
+            allFurniture={allFurniture}
             idols={idolItems}
             foodBox={foodBoxItem && (ownership[foodBoxItem.id] || 0) > 0 ? foodBoxItem : null}
             fillProgress={fillProgress}
@@ -881,6 +1135,11 @@ function App() {
         onImport={handleImportOwnership}
         furnitureIdMap={furnitureIdMap}
         onHandleCaptured={handleSavefileHandleCaptured}
+      />
+      <TestModal
+        open={testModalOpen}
+        onClose={() => setTestModalOpen(false)}
+        onTest={handleTestMode}
       />
     </div>
   );

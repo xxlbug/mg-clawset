@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useLayoutEffect } from 'react';
+import { useState, useRef, useMemo, useLayoutEffect, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import type { FurnitureItem, PlacedFurniture } from '../types/furniture';
 import RoomGrid from './RoomGrid';
@@ -7,6 +7,8 @@ import { getRoomLabel, HOUSE_VIEW, ATTIC_INDEX } from '../types/furniture';
 import { captureRoom, captureHouse } from '../utils/roomCapture';
 import { ALL_STATS, STAT_LABELS } from '../utils/autoPopulate';
 import type { AlgorithmKey, StatWeights, RoomFillPlan } from '../utils/autoPopulate';
+import type { V2Settings } from '../utils/autoPopulateV2';
+import { DEFAULT_V2_SETTINGS } from '../utils/autoPopulateV2';
 import type { StatKey } from '../types/furniture';
 import StatIcon from './StatIcon';
 import RoomChecklist from './RoomChecklist';
@@ -20,33 +22,126 @@ const LEGEND: { type: number; color: string; border: string; label: string }[] =
   { type: 5, color: 'var(--charcoal)', border: 'rgba(76,76,71,0.5)', label: 'Background' },
 ];
 
-type FillPresetKey = 'breeding' | 'storage' | 'mutation';
+type FillPresetKey = 'breeding' | 'ultrabreeding' | 'sterilebreed' | 'sterile' | 'storage' | 'mutation' | 'fightclub' | 'appeal' | 'random';
 
-const EMPTY_WEIGHTS: Record<StatKey, -1 | 0 | 1> = { appeal: 0, comfort: 0, stimulation: 0, health: 0, mutation: 0 };
+const EMPTY_WEIGHTS: Record<StatKey, -2 | -1 | 0 | 1> = { appeal: 0, comfort: 0, stimulation: 0, health: 0, mutation: 0 };
+
+const V2_PRESETS: Record<string, Partial<V2Settings>> = {
+  fast: {},  // pure DEFAULT_V2_SETTINGS
+  medium: { defaultMaximizeIterations: 25 },
+  long: { defaultMaximizeIterations: 100 },
+  extraLong: { defaultMaximizeIterations: 500 },
+};
+
+const WORKSPACE_STORAGE_KEY = 'clawset-designer-workspace';
+
+interface WorkspacePersistedState {
+  expertView: boolean;
+  presetKey: FillPresetKey | 'blank';
+  roomPresets: Record<number, FillPresetKey | 'custom' | 'skip'>;
+  roomWeights: Record<number, Record<StatKey, -2 | -1 | 0 | 1>>;
+  roomIdols: Record<number, string[]>;
+  roomFood: Record<number, 0 | 1 | -1>;
+  priorityOrder: number[];
+  statWeights: Record<StatKey, -2 | -1 | 0 | 1>;
+  foodTolerance?: 'auto' | 'maximize' | 'minimize';
+  searchMode?: 'fast' | 'medium' | 'long' | 'extraLong';
+  selectedIdols: string[];
+  excludedIdols: string[];
+  roomExcluded: Record<number, string[]>;
+  useV2?: boolean;
+  v2Settings?: V2Settings;
+}
+
+function loadWorkspaceState(): Partial<WorkspacePersistedState> {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Partial<WorkspacePersistedState>;
+  } catch { return {}; }
+}
+
+function saveWorkspaceState(state: WorkspacePersistedState): void {
+  localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(state));
+}
 
 const FILL_PRESETS: Record<FillPresetKey, {
   label: string;
   description: string;
-  tristate: Partial<Record<StatKey, -1 | 0 | 1>>;
+  tristate: Partial<Record<StatKey, -2 | -1 | 0 | 1>>;
   minStats?: Partial<Record<StatKey, number>>;
-  autoIdolKey?: string;
+  autoIdolKeys?: string[];
+  /** Idol image_url keys to exclude from placements in rooms using this preset. */
+  excludeIdolKeys?: string[];
+  /** Breeding presets default to no food boxes (cats don't eat). */
+  noFood?: true;
 }> = {
   breeding: {
     label: 'Breeding',
-    description: 'Maximize stimulation, keep room comfort at 4+ (enough for 4 cats)',
+    description: 'Maximizes stimulation; keeps comfort 4+ for four breeding cats. Auto-includes the Stimulation Idol; excludes the Suppressor (Chastity), Evolution, and Fight Idols.',
     tristate: { stimulation: 1 },
     minStats: { comfort: 4 },
+    autoIdolKeys: ['stimulationidol'],
+    excludeIdolKeys: ['suppressoridol', 'evolutionidol', 'fightidol'],
+    noFood: true,
+  },
+  ultrabreeding: {
+    label: 'Ultrabreeding',
+    description: 'Lowers the comfort floor to 2 (frees space vs Breeding); maximizes stimulation, keeps health ≥1, and completely bans mutation items. Auto-includes the Stimulation Idol; excludes Suppressor, Evolution, Fight, and Health Idols.',
+    tristate: { stimulation: 1, mutation: -2 },
+    minStats: { comfort: 2, health: 1 },
+    autoIdolKeys: ['stimulationidol'],
+    excludeIdolKeys: ['suppressoridol', 'evolutionidol', 'fightidol', 'healthidol'],
+    noFood: true,
+  },
+  sterilebreed: {
+    label: 'Sterile Breeding',
+    description: 'Maximizes stimulation for strong offspring while completely banning all mutation items to prevent sterility. Keeps comfort ≥4. Auto-includes the Stimulation Idol; excludes the Evolution (mutation), Suppressor (Chastity), and Fight Idols.',
+    tristate: { stimulation: 1, mutation: -2 },
+    minStats: { comfort: 4 },
+    autoIdolKeys: ['stimulationidol'],
+    excludeIdolKeys: ['evolutionidol', 'suppressoridol', 'fightidol'],
+    noFood: true,
   },
   storage: {
     label: 'Storage',
-    description: 'Maximize health + comfort; auto-selects the Idol of Chastity if owned (no breeding)',
-    tristate: { health: 1, comfort: 1 },
-    autoIdolKey: 'suppressoridol',
+    description: 'Maximizes health and comfort. Auto-includes the Suppressor (Chastity) and Health Idols; excludes the Fight Idol.',
+    tristate: { health: 1, comfort: 1,  stimulation: -1 },
+    autoIdolKeys: ['suppressoridol', 'healthidol'],
+    excludeIdolKeys: ['fightidol'],
+  },
+  sterile: {
+    label: 'Sterile Storage',
+    description: 'Maximizes health and comfort with zero mutation tolerance — any mutation item is completely banned, never placed. Auto-includes Suppressor and Health Idols; excludes Fight and Evolution Idols.',
+    tristate: { health: 1, comfort: 1, mutation: -2,  stimulation: -1 },
+    autoIdolKeys: ['suppressoridol', 'healthidol'],
+    excludeIdolKeys: ['fightidol', 'evolutionidol'],
   },
   mutation: {
     label: 'Mutation',
-    description: 'Maximize mutation + comfort with the lowest possible stimulation',
-    tristate: { mutation: 1, comfort: 1, stimulation: -1 },
+    description: 'Maximizes mutation; keeps comfort 4+ for cats. Minimizes stimulation. Auto-includes the Evolution Idol; excludes Stimulation and Fight Idols.',
+    tristate: { mutation: 1, stimulation: -1 },
+    minStats: { comfort: 8 },
+    autoIdolKeys: ['evolutionidol'],
+    excludeIdolKeys: ['stimulationidol', 'fightidol'],
+  },
+  fightclub: {
+    label: 'Fight Club',
+    description: 'Bans all comfort — only zero-comfort items allowed. Auto-includes the Chaos Idol (deadlier fights, double rewards); excludes Comfort and Suppressor (Chastity) Idols.',
+    tristate: { comfort: -2, stimulation: -1 },
+    autoIdolKeys: ['fightidol'],
+    excludeIdolKeys: ['comfortidol', 'suppressoridol'],
+  },
+  appeal: {
+    label: 'Appeal',
+    description: 'Maximizes appeal for stronger base-stat inheritance. Auto-includes the Appeal Idol; no idol exclusions.',
+    tristate: { appeal: 1,  stimulation: -2 },
+    autoIdolKeys: ['appealidol'],
+  },
+  random: {
+    label: 'Random',
+    description: 'No stat preference — fills every gap as densely as possible with any owned furniture, largest pieces first.',
+    tristate: {},
   },
 };
 
@@ -69,12 +164,18 @@ interface Props {
   onAutoPopulate: (config: {
     algorithm: AlgorithmKey;
     plans: RoomFillPlan[];
-    keepSearching?: boolean;
+    searchMode?: 'fast' | 'medium' | 'long' | 'extraLong';
+    /** Item ID → house-wide total cap (e.g. food box limit). */
+    itemCaps?: Record<string, number>;
+    /** V2 tunable settings; ignored by v1. */
+    v2Settings?: V2Settings;
   }) => void;
   ownership: Record<string, number>;
   drawerOpen: boolean;
   onToggleDrawer: () => void;
   isRoomUnlocked: (i: number) => boolean;
+  /** All furniture catalog — used for theoretical max stat calculations. */
+  allFurniture: FurnitureItem[];
   /** All special idols; unowned ones render disabled. */
   idols: FurnitureItem[];
   /** Owned food box item (null when none owned). */
@@ -97,42 +198,159 @@ interface Props {
 export default function RoomDesignerWorkspace({
   visible, placed, rooms, activeRoom, onActiveRoomChange,
   onPlace, onRemove, onMove, onImportRooms, onAutoPopulate, ownership,
-  drawerOpen, onToggleDrawer, isRoomUnlocked, idols, foodBox, fillProgress = null, fillReport = null,
+  drawerOpen, onToggleDrawer, isRoomUnlocked, allFurniture, idols, foodBox, fillProgress = null, fillReport = null,
   fillSearch = null, onStopSearch, onUndo, onRedo, onEmptyRooms,
 }: Props) {
-  const [expertView, setExpertView] = useState(false);
+  const persisted = useMemo(() => loadWorkspaceState(), []);
+
+  const [expertView, setExpertView] = useState(() => persisted.expertView ?? false);
   // single-room fill: a preset acts as an editable starting point. 'blank' =
   // start from zero. `presetModified` flags hand-edited stats so the label can
   // show "(modified)" while the preset's floor/idol still apply.
-  const [presetKey, setPresetKey] = useState<FillPresetKey | 'blank'>('breeding');
+  const [presetKey, setPresetKey] = useState<FillPresetKey | 'blank'>(() => persisted.presetKey ?? 'breeding');
   const [presetModified, setPresetModified] = useState(false);
   // house fill: independent preset per room
-  const [roomPresets, setRoomPresets] = useState<Record<number, FillPresetKey | 'custom' | 'skip'>>({});
+  const [roomPresets, setRoomPresets] = useState<Record<number, FillPresetKey | 'custom' | 'skip'>>(() => persisted.roomPresets ?? {});
   // per-room stat weights for rooms set to 'custom' in the house fill
-  const [roomWeights, setRoomWeights] = useState<Record<number, Record<StatKey, -1 | 0 | 1>>>({});
+  const [roomWeights, setRoomWeights] = useState<Record<number, Record<StatKey, -2 | -1 | 0 | 1>>>(() => persisted.roomWeights ?? {});
   // per-room idol picks for the house fill (in addition to a preset's auto-idol)
-  const [roomIdols, setRoomIdols] = useState<Record<number, Set<string>>>({});
+  const [roomIdols, setRoomIdols] = useState<Record<number, Set<string>>>(() => {
+    const raw = persisted.roomIdols;
+    if (!raw) return {};
+    const out: Record<number, Set<string>> = {};
+    for (const [k, v] of Object.entries(raw)) out[Number(k)] = new Set(v);
+    return out;
+  });
   // per-room "include a food box" toggle for the house fill
-  const [roomFood, setRoomFood] = useState<Record<number, boolean>>({});
-  const [statWeights, setStatWeights] = useState<Record<StatKey, -1 | 0 | 1>>(
-    () => ({ ...EMPTY_WEIGHTS, ...FILL_PRESETS.breeding.tristate }),
+  const [roomFood, setRoomFood] = useState<Record<number, 0 | 1 | -1>>(() => persisted.roomFood ?? {});
+  // house fill room priority order (first = gets first pick of shared items)
+  const [priorityOrder, setPriorityOrder] = useState<number[]>(() => persisted.priorityOrder ?? [ATTIC_INDEX, 0, 1, 2, 3]);
+  const [statWeights, setStatWeights] = useState<Record<StatKey, -2 | -1 | 0 | 1>>(
+    () => persisted.statWeights ?? ({ ...EMPTY_WEIGHTS, ...FILL_PRESETS.breeding.tristate } as Record<StatKey, -2 | -1 | 0 | 1>),
   );
-  const [includeFood, setIncludeFood] = useState(false);
+  const [foodTolerance, setFoodTolerance] = useState<'auto' | 'maximize' | 'minimize'>(() => {
+    const saved = (persisted as Record<string, unknown>).foodTolerance;
+    if (saved === 'auto' || saved === 'maximize' || saved === 'minimize') return saved;
+    // Migration: old includeFood 0→auto, 1→maximize, −1→minimize
+    const old = (persisted as Record<string, unknown>).includeFood;
+    if (old === 0) return 'auto';
+    if (old === 1) return 'maximize';
+    if (old === -1) return 'minimize';
+    return 'auto';
+  });
+  const [useV2, setUseV2] = useState(() => persisted.useV2 ?? false);
+  const [v2Settings, setV2Settings] = useState<V2Settings>(() => persisted.v2Settings ?? { ...DEFAULT_V2_SETTINGS });
+  const [v2PresetKey, setV2PresetKey] = useState<'fast' | 'medium' | 'long' | 'extraLong' | 'custom'>('fast');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // Search is always the randomized "maximize" — fast enough that the old
   // Quick/Maximize choice wasn't worth a widget.
-  const algorithm: AlgorithmKey = 'maximize';
-  // when set, "Fill" runs repeated passes until the user clicks "Use best".
-  const [keepSearching, setKeepSearching] = useState(false);
+  const algorithm: AlgorithmKey = useV2 ? 'maximize-v2' : 'maximize';
+  const [searchMode, setSearchMode] = useState<'fast' | 'medium' | 'long' | 'extraLong'>(() => {
+    if (persisted.searchMode) {
+      const oldToNew: Record<string, 'fast' | 'medium' | 'long' | 'extraLong'> = { optimal: 'fast', standard: 'medium', extreme: 'extraLong' };
+      return oldToNew[persisted.searchMode] ?? persisted.searchMode as 'fast' | 'medium' | 'long' | 'extraLong';
+    }
+    // Migration: if old keepSearching was enabled → 'long', else → 'fast' (one-shot)
+    if ((persisted as Record<string, unknown>).keepSearchingEnabled) return 'long';
+    return 'fast';
+  });
   // house two-pane: which room the detail drawer is editing (null = first)
   const [detailRoom, setDetailRoom] = useState<number | null>(null);
-  const [selectedIdols, setSelectedIdols] = useState<Set<string>>(() => new Set());
+  const [selectedIdols, setSelectedIdols] = useState<Set<string>>(() => {
+    const raw = persisted.selectedIdols;
+    return raw ? new Set(raw) : new Set<string>();
+  });
+  const [excludedIdols, setExcludedIdols] = useState<Set<string>>(() => {
+    const raw = persisted.excludedIdols;
+    return raw ? new Set(raw) : new Set<string>();
+  });
+  const [roomExcluded, setRoomExcluded] = useState<Record<number, Set<string>>>(() => {
+    const raw = persisted.roomExcluded;
+    if (!raw) return {};
+    const out: Record<number, Set<string>> = {};
+    for (const [k, v] of Object.entries(raw)) out[Number(k)] = new Set(v);
+    return out;
+  });
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [hoverItem, setHoverItem] = useState<string | null>(null);
   const [connectorLines, setConnectorLines] = useState<{ x1: number; y1: number; x2: number; y2: number }[]>([]);
-  // lightweight hover overlay (item name + stats tag) when the checklist panel is closed
-  const [hoverTip, setHoverTip] = useState<{ x: number; y: number; text: string; item: FurnitureItem | null; count: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const linkRootRef = useRef<HTMLDivElement>(null);
+  const prevActiveRoomRef = useRef<number>(activeRoom);
+
+  // Persist workspace inputs to localStorage on every change.
+  useEffect(() => {
+    saveWorkspaceState({
+      expertView,
+      presetKey,
+      roomPresets,
+      roomWeights,
+      roomIdols: Object.fromEntries(Object.entries(roomIdols).map(([k, v]) => [k, [...v]])),
+      roomFood,
+      priorityOrder,
+      statWeights,
+      foodTolerance,
+      searchMode,
+      selectedIdols: [...selectedIdols],
+      excludedIdols: [...excludedIdols],
+      roomExcluded: Object.fromEntries(Object.entries(roomExcluded).map(([k, v]) => [k, [...v]])),
+      useV2,
+      v2Settings,
+    });
+  }, [
+    expertView, presetKey, roomPresets, roomWeights, roomIdols, roomFood,
+    priorityOrder, statWeights, foodTolerance, searchMode, selectedIdols, excludedIdols, roomExcluded, useV2, v2Settings,
+  ]);
+
+  const handleHoverItem = (id: string | null) => {
+    setHoverItem(id);
+  };
+
+  // Load a preset as an editable starting point: its stats fill the chips and
+  // its floor/idol travel with it (kept even after the user edits the stats).
+  // Also saves the preset choice to the current room's personal template.
+  const applyPreset = (key: FillPresetKey) => {
+    const preset = FILL_PRESETS[key];
+    setPresetKey(key);
+    setPresetModified(false);
+    setStatWeights({ ...EMPTY_WEIGHTS, ...preset.tristate });
+    const autoIds = preset.autoIdolKeys
+      ?.map((k) => idols.find((i) => i.image_url.includes(k) && (ownership[i.id] || 0) > 0))
+      .filter((i): i is FurnitureItem => !!i)
+      .map((i) => i.id) ?? [];
+    setSelectedIdols(new Set(autoIds));
+    const excludeIds = preset.excludeIdolKeys
+      ?.map((k) => idols.find((i) => i.image_url.includes(k) && (ownership[i.id] || 0) > 0))
+      .filter((i): i is FurnitureItem => !!i)
+      .map((i) => i.id) ?? [];
+    setExcludedIdols(new Set(excludeIds));
+    if (activeRoom !== HOUSE_VIEW) {
+      setRoomPresets((prev) => ({ ...prev, [activeRoom]: key }));
+    }
+  };
+
+  // Start from zero: no stats, no floor.
+  const selectBlank = () => {
+    setPresetKey('blank');
+    setPresetModified(false);
+    setStatWeights({ ...EMPTY_WEIGHTS });
+  };
+
+  // Sync the editor preset with the room's saved template on room switch.
+  if (prevActiveRoomRef.current !== activeRoom && activeRoom !== HOUSE_VIEW) {
+    prevActiveRoomRef.current = activeRoom;
+    const rp = roomPresets[activeRoom];
+    if (rp === 'skip') {
+      selectBlank();
+    } else if (rp && rp !== 'custom') {
+      applyPreset(rp);
+    } else if (rp === 'custom') {
+      setPresetKey('blank');
+      setPresetModified(true);
+      setStatWeights({ ...(roomWeights[activeRoom] ?? EMPTY_WEIGHTS) });
+      setSelectedIdols(new Set(roomIdols[activeRoom]));
+    }
+  }
 
   // Thin connector lines from the hovered checklist row to every matching placed piece
   useLayoutEffect(() => {
@@ -167,8 +385,6 @@ export default function RoomDesignerWorkspace({
     return () => cancelAnimationFrame(id);
   }, [hoverItem, checklistOpen, placed]);
 
-
-
   // Legend numbers: alphabetical unique items of the active room (matches checklist order)
   const labelNumbers = useMemo(() => {
     const ids = [...new Map(placed.map((p) => [p.item.id, p.item.name])).entries()]
@@ -179,81 +395,42 @@ export default function RoomDesignerWorkspace({
     return map;
   }, [placed]);
 
-    // Hover tag: name + label number next to the hovered piece (checklist closed)
-  useLayoutEffect(() => {
-    const root = linkRootRef.current;
-    if (!hoverItem || checklistOpen || !root) {
-      setHoverTip(null);
-      return;
-    }
-    const piece = root.querySelector(`[data-piece-id="${CSS.escape(hoverItem)}"]`);
-    if (!piece) {
-      setHoverTip(null);
-      return;
-    }
-    const rootRect = root.getBoundingClientRect();
-    const r = piece.getBoundingClientRect();
-    let item: FurnitureItem | null = null;
-    let count = 0;
-    for (const room of rooms) {
-      for (const pl of room) {
-        if (pl.item.id === hoverItem) {
-          item = pl.item;
-          count++;
-        }
-      }
-    }
-    const num = labelNumbers[hoverItem];
-    setHoverTip({
-      // keep the tag inside the container even for pieces at the edges
-      x: Math.min(Math.max(r.left + r.width / 2 - rootRect.left, 70), rootRect.width - 70),
-      y: Math.max(r.top - rootRect.top, 44),
-      text: `${num ? `#${num} ` : ''}${item?.name ?? ''}${count > 1 ? ` \u00d7${count}` : ''}`,
-      item,
-      count,
-    });
-  }, [hoverItem, checklistOpen, rooms, labelNumbers]);
-
-  const handleHoverItem = (id: string | null) => {
-    setHoverItem(id);
-  };
-
-  // Load a preset as an editable starting point: its stats fill the chips and
-  // its floor/idol travel with it (kept even after the user edits the stats).
-  const applyPreset = (key: FillPresetKey) => {
-    const preset = FILL_PRESETS[key];
-    setPresetKey(key);
-    setPresetModified(false);
-    setStatWeights({ ...EMPTY_WEIGHTS, ...preset.tristate });
-    if (preset.autoIdolKey) {
-      const idol = idols.find((i) => i.image_url.includes(preset.autoIdolKey!) && (ownership[i.id] || 0) > 0);
-      if (idol) setSelectedIdols((prev) => new Set(prev).add(idol.id));
-    }
-  };
-
-  // Start from zero: no stats, no floor.
-  const selectBlank = () => {
-    setPresetKey('blank');
-    setPresetModified(false);
-    setStatWeights({ ...EMPTY_WEIGHTS });
-  };
-
   // Editing a stat keeps the active preset's floor/idol but marks it modified.
   const cycleStat = (stat: StatKey) => {
     if (presetKey !== 'blank') setPresetModified(true);
     setStatWeights((prev) => ({
       ...prev,
-      [stat]: prev[stat] === 0 ? 1 : prev[stat] === 1 ? -1 : 0,
+      [stat]: prev[stat] === 0 ? 1 : prev[stat] === 1 ? -1 : prev[stat] === -1 ? -2 : 0,
     }));
   };
 
+  // Three-state idol toggle: neutral → place (selected) → ignore (excluded) → neutral
   const toggleIdol = (id: string) => {
-    setSelectedIdols((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+    setPresetModified(true);
+    setSelectedIdols((prevSel) => {
+      if (prevSel.has(id)) {
+        // was place → move to ignore
+        setExcludedIdols((prevEx) => new Set(prevEx).add(id));
+        const next = new Set(prevSel);
+        next.delete(id);
+        return next;
+      }
+      setExcludedIdols((prevEx) => {
+        if (prevEx.has(id)) {
+          // was ignore → back to neutral
+          const next = new Set(prevEx);
+          next.delete(id);
+          return next;
+        }
+        return prevEx;
+      });
+      return prevSel.has(id) ? prevSel : new Set(prevSel).add(id);
     });
+  };
+
+  const toggleFood = () => {
+    setPresetModified(true);
+    setFoodTolerance((prev) => prev === 'auto' ? 'maximize' : prev === 'maximize' ? 'minimize' : 'auto');
   };
 
   const activeWeights: StatWeights = Object.fromEntries(
@@ -270,34 +447,76 @@ export default function RoomDesignerWorkspace({
     if (roomIdols[ri]) return roomIdols[ri];
     const choice = roomChoice(ri);
     if (choice !== 'custom' && choice !== 'skip') {
-      const key = FILL_PRESETS[choice].autoIdolKey;
-      const idol = key ? ownedIdols.find((i) => i.image_url.includes(key)) : undefined;
-      if (idol) return new Set([idol.id]);
+      const keys = FILL_PRESETS[choice].autoIdolKeys;
+      if (keys) {
+        const autoIds = ownedIdols
+          .filter((i) => keys.some((k) => i.image_url.includes(k)))
+          .map((i) => i.id);
+        if (autoIds.length > 0) return new Set(autoIds);
+      }
     }
     return new Set();
   };
   const toggleRoomIdol = (ri: number, id: string) => {
-    setRoomIdols((prev) => {
-      const cur = new Set(prev[ri] ?? roomIdolsFor(ri));
-      if (cur.has(id)) cur.delete(id); else cur.add(id);
-      return { ...prev, [ri]: cur };
-    });
+    const currentPlaced = roomIdols[ri] ?? roomIdolsFor(ri);
+    const currentExcluded = roomExcluded[ri] ?? roomExcludedFor(ri);
+
+    if (currentPlaced.has(id)) {
+      // place → ignore
+      const nextPlaced = new Set(currentPlaced);
+      nextPlaced.delete(id);
+      setRoomIdols((prev) => ({ ...prev, [ri]: nextPlaced }));
+      const nextExcluded = new Set(currentExcluded);
+      nextExcluded.add(id);
+      setRoomExcluded((prev) => ({ ...prev, [ri]: nextExcluded }));
+    } else if (currentExcluded.has(id)) {
+      // ignore → neutral: clear override so room falls back to preset
+      const nextExcluded = new Set(currentExcluded);
+      nextExcluded.delete(id);
+      setRoomExcluded((prev) => {
+        const r = { ...prev };
+        if (nextExcluded.size > 0) r[ri] = nextExcluded;
+        else delete r[ri];
+        return r;
+      });
+    } else {
+      // neutral → place
+      const nextPlaced = new Set(currentPlaced);
+      nextPlaced.add(id);
+      setRoomIdols((prev) => ({ ...prev, [ri]: nextPlaced }));
+    }
+  };
+
+  // A house room's excluded idols: user override, else preset's excludeIdolKeys
+  const roomExcludedFor = (ri: number): Set<string> => {
+    if (roomExcluded[ri]) return roomExcluded[ri];
+    const choice = roomChoice(ri);
+    if (choice !== 'custom' && choice !== 'skip') {
+      const keys = FILL_PRESETS[choice].excludeIdolKeys;
+      if (keys) {
+        const excludedIds = ownedIdols
+          .filter((i) => keys.some((k) => i.image_url.includes(k)))
+          .map((i) => i.id);
+        if (excludedIds.length > 0) return new Set(excludedIds);
+      }
+    }
+    return new Set();
   };
 
   const unlockedRooms = ([ATTIC_INDEX, 0, 1, 2, 3] as number[]).filter(isRoomUnlocked);
   // default to one of each preset, remaining rooms start as custom
-  const PRESET_CYCLE: FillPresetKey[] = ['breeding', 'storage', 'mutation'];
+  const PRESET_CYCLE: FillPresetKey[] = ['breeding', 'storage', 'fightclub', 'mutation', 'appeal', 'random'];
   const roomChoice = (ri: number): FillPresetKey | 'custom' | 'skip' => {
     if (roomPresets[ri]) return roomPresets[ri];
     const idx = Math.max(0, unlockedRooms.indexOf(ri));
     return idx < PRESET_CYCLE.length ? PRESET_CYCLE[idx] : 'custom';
   };
-  const roomWeightsFor = (ri: number): Record<StatKey, -1 | 0 | 1> =>
+  const roomWeightsFor = (ri: number): Record<StatKey, -2 | -1 | 0 | 1> =>
     roomWeights[ri] ?? EMPTY_WEIGHTS;
   const cycleRoomStat = (ri: number, stat: StatKey) => {
     setRoomWeights((prev) => {
       const cur = prev[ri] ?? EMPTY_WEIGHTS;
-      return { ...prev, [ri]: { ...cur, [stat]: cur[stat] === 0 ? 1 : cur[stat] === 1 ? -1 : 0 } };
+      return { ...prev, [ri]: { ...cur, [stat]: cur[stat] === 0 ? 1 : cur[stat] === 1 ? -1 : cur[stat] === -1 ? -2 : 0 } };
     });
   };
   // The house two-pane always shows a drawer; fall back to the first room when
@@ -312,30 +531,58 @@ export default function RoomDesignerWorkspace({
       && unlockedRooms.every((ri) => roomChoice(ri) !== 'custom' || ALL_STATS.some((st) => roomWeightsFor(ri)[st] > 0))
     : hasPositiveWeight;
 
+  // Resolve preset excludeIdolKeys to actual item IDs by matching image_url.
+  const resolveExcludedIds = (excludeIdolKeys: string[] | undefined): string[] => {
+    if (!excludeIdolKeys) return [];
+    return excludeIdolKeys
+      .map((key) => idols.find((i) => i.image_url.includes(key)))
+      .filter((i): i is FurnitureItem => i !== undefined)
+      .map((i) => i.id);
+  };
+
   const buildHousePlans = (): RoomFillPlan[] => {
     const plans: RoomFillPlan[] = [];
-    for (const ri of unlockedRooms) {
+    const orderedRooms = [...unlockedRooms].sort((a, b) => {
+      const ia = priorityOrder.indexOf(a);
+      const ib = priorityOrder.indexOf(b);
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    });
+    let foodSlotsUsed = 0;
+    for (const ri of orderedRooms) {
       const choice = roomChoice(ri);
       if (choice === 'skip') continue;
-      // idols (preset auto-idol pre-selected, user-overridable) + optional food
+      const presetNoFood = choice !== 'custom' && FILL_PRESETS[choice].noFood && roomFood[ri] !== 1;
+      const wantsFood = foodTolerance === 'maximize'
+        ? !!foodBox && !presetNoFood
+        : foodTolerance === 'minimize'
+        ? false
+        : roomFood[ri] === 1 && foodBox && !presetNoFood;
+      const canHaveFood = wantsFood;
+      if (wantsFood && canHaveFood) foodSlotsUsed++;
       const mustInclude = [
         ...roomIdolsFor(ri),
-        ...(roomFood[ri] && foodBox ? [foodBox.id] : []),
+        ...(canHaveFood ? [foodBox!.id] : []),
       ];
+      const excludeFood = ((roomFood[ri] === -1 || presetNoFood || foodTolerance === 'minimize') && foodBox) ? [foodBox.id] : [];
       if (choice === 'custom') {
         const w = roomWeightsFor(ri);
         const weights: StatWeights = Object.fromEntries(
           ALL_STATS.filter((st) => w[st] !== 0).map((st) => [st, w[st]]),
         );
-        plans.push({ roomIndex: ri, weights, mustInclude });
+        const excluded = [...roomExcludedFor(ri), ...excludeFood];
+        plans.push({ roomIndex: ri, weights, mustInclude, ...(excluded.length > 0 ? { excludeItemIds: excluded } : {}) });
         continue;
       }
       const preset = FILL_PRESETS[choice];
+      const presetExcluded = resolveExcludedIds(preset.excludeIdolKeys);
+      const roomExcluded = [...roomExcludedFor(ri)];
+      const excludeItemIds = [...new Set([...presetExcluded, ...roomExcluded, ...excludeFood])];
       plans.push({
         roomIndex: ri,
         weights: Object.fromEntries(Object.entries(preset.tristate)) as StatWeights,
         mustInclude,
         minStats: preset.minStats,
+        excludeItemIds,
       });
     }
     return plans;
@@ -350,6 +597,7 @@ export default function RoomDesignerWorkspace({
   };
 
   const handleAutoFill = () => {
+    const itemCaps = undefined;
     if (activeRoom === HOUSE_VIEW) {
       const plans = buildHousePlans();
       const replacing = plans.reduce((s, p) => s + rooms[p.roomIndex].length, 0);
@@ -359,7 +607,7 @@ export default function RoomDesignerWorkspace({
       ) {
         return;
       }
-      onAutoPopulate({ algorithm, plans, keepSearching });
+      onAutoPopulate({ algorithm, plans, searchMode, itemCaps, v2Settings });
       return;
     }
     const statText = ALL_STATS.filter((st) => statWeights[st] !== 0)
@@ -374,25 +622,35 @@ export default function RoomDesignerWorkspace({
     ) {
       return;
     }
+    const presetNoFood = presetKey !== 'blank' && FILL_PRESETS[presetKey].noFood && foodTolerance !== 'maximize';
     const mustInclude = [
       ...idols.filter((i) => selectedIdols.has(i.id)).map((i) => i.id),
-      ...(includeFood && foodBox ? [foodBox.id] : []),
+      ...(foodTolerance === 'maximize' && foodBox && !presetNoFood ? [foodBox.id] : []),
     ];
+    const presetExcluded = presetKey !== 'blank' ? resolveExcludedIds(FILL_PRESETS[presetKey].excludeIdolKeys) : [];
+    const userExcluded = idols.filter((i) => excludedIdols.has(i.id)).map((i) => i.id);
+    const foodExcluded = ((foodTolerance === 'minimize' || presetNoFood) && foodBox) ? [foodBox.id] : [];
+    const excludeItemIds = [...new Set([...presetExcluded, ...userExcluded, ...foodExcluded])];
     onAutoPopulate({
       algorithm,
-      plans: [{ roomIndex: activeRoom, weights: activeWeights, mustInclude, minStats }],
-      keepSearching,
+      plans: [{ roomIndex: activeRoom, weights: activeWeights, mustInclude, minStats, excludeItemIds }],
+      searchMode,
+      itemCaps,
+      v2Settings,
     });
   };
 
-  const renderStatChips = (weights: Record<StatKey, -1 | 0 | 1>, onCycle: (stat: StatKey) => void) => (
+  const renderStatChips = (weights: Record<StatKey, -2 | -1 | 0 | 1>, onCycle: (stat: StatKey) => void) => (
     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-      <span style={{ fontSize: 11, color: 'var(--text-m)' }} title="Click a stat to cycle: maximize \u2192 avoid \u2192 off">Stats:</span>
-      {ALL_STATS.map((stat) => (
+      <span style={{ fontSize: 11, color: 'var(--text-m)' }} title="Click a stat to cycle: maximize → avoid → ban → off">Stats:</span>
+      {ALL_STATS.map((stat) => {
+        const w = weights[stat];
+        const banned = w === -2;
+        return (
         <button
           key={stat}
           onClick={() => onCycle(stat)}
-          title={`${STAT_LABELS[stat]} \u2014 click to cycle: maximize \u2192 avoid \u2192 off`}
+          title={`${STAT_LABELS[stat]} — click to cycle: maximize → avoid → ban → off`}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -403,22 +661,23 @@ export default function RoomDesignerWorkspace({
             fontSize: 12,
             fontWeight: 600,
             cursor: 'pointer',
-            border: `1px solid ${weights[stat] === 1 ? STAT_COLORS[stat] : weights[stat] === -1 ? 'var(--charcoal)' : 'var(--border)'}`,
-            background: weights[stat] === 1 ? STAT_COLORS[stat] : weights[stat] === -1 ? 'var(--charcoal)' : 'var(--bg)',
-            color: weights[stat] !== 0 ? '#fff' : 'var(--text-m)',
+            border: `1px solid ${w === 1 ? STAT_COLORS[stat] : banned ? '#c62828' : w === -1 ? 'var(--charcoal)' : 'var(--border)'}`,
+            background: w === 1 ? STAT_COLORS[stat] : banned ? 'rgba(198,40,40,0.15)' : w === -1 ? 'var(--charcoal)' : 'var(--bg)',
+            color: w === 1 || w === -1 ? '#fff' : banned ? '#c62828' : 'var(--text-m)',
           }}
         >
           <StatIcon stat={stat} size={15} />
           {STAT_LABELS[stat]}
-          {weights[stat] === 1 ? ' +' : weights[stat] === -1 ? ' \u2212' : ''}
+          {w === 1 ? ' +' : banned ? ' ✕' : w === -1 ? ' −' : ''}
         </button>
-      ))}
+        );
+      })}
     </div>
   );
   const statChips = renderStatChips(statWeights, cycleStat);
 
   // A house room's effective tristate weights (preset's, or the custom ones).
-  const roomEffectiveWeights = (ri: number): Record<StatKey, -1 | 0 | 1> => {
+  const roomEffectiveWeights = (ri: number): Record<StatKey, -2 | -1 | 0 | 1> => {
     const choice = roomChoice(ri);
     if (choice === 'custom') return roomWeightsFor(ri);
     if (choice === 'skip') return EMPTY_WEIGHTS;
@@ -429,7 +688,7 @@ export default function RoomDesignerWorkspace({
   // hovering floats the full stat name as an overlay (see .af-tok in index.css)
   // so the inline footprint never changes and sibling icons stay put.
   const SUMMARY_ICON = 15;
-  const renderWeightSummary = (weights: Record<StatKey, -1 | 0 | 1>, minStats?: Partial<Record<StatKey, number>>) => {
+  const renderWeightSummary = (weights: Record<StatKey, -2 | -1 | 0 | 1>, minStats?: Partial<Record<StatKey, number>>) => {
     const active = ALL_STATS.filter((st) => weights[st] !== 0);
     if (active.length === 0 && !minStats) {
       return <span style={{ fontSize: 12, color: 'var(--blushed-brick)' }}>set stats ▾</span>;
@@ -438,11 +697,12 @@ export default function RoomDesignerWorkspace({
       <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {active.map((st) => {
           const max = weights[st] === 1;
+          const banned = weights[st] === -2;
           return (
-            <span key={st} className="af-tok" style={{ color: max ? STAT_COLORS[st] : 'var(--lavender-grey)' }}>
+            <span key={st} className="af-tok" style={{ color: max ? STAT_COLORS[st] : banned ? '#c62828' : 'var(--lavender-grey)' }}>
               <StatIcon stat={st} size={SUMMARY_ICON} />
-              <span style={{ marginLeft: 1 }}>{max ? '+' : '−'}</span>
-              <span className="af-name">{STAT_LABELS[st]}{max ? ' +' : ' −'}</span>
+              <span style={{ marginLeft: 1 }}>{max ? '+' : banned ? '✕' : '−'}</span>
+              <span className="af-name">{STAT_LABELS[st]}{max ? ' +' : banned ? ' ✕' : ' −'}</span>
             </span>
           );
         })}
@@ -482,7 +742,7 @@ export default function RoomDesignerWorkspace({
     );
     if (choice === 'skip') {
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {title}
           <div className="af-skip-note">
             <div className="af-skip-head">Skipped — nothing to configure</div>
@@ -494,47 +754,58 @@ export default function RoomDesignerWorkspace({
     }
     const hasExtras = !!foodBox || ownedIdols.length > 0;
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {title}
         {choice === 'custom'
           ? renderStatChips(roomWeightsFor(ri), (stat) => cycleRoomStat(ri, stat))
-          : <div style={{ fontSize: 12, color: 'var(--text-m)' }}>{FILL_PRESETS[choice].description}</div>}
+          : <div style={{ fontSize: 11, color: 'var(--text-m)' }}>{FILL_PRESETS[choice].description}</div>}
         {hasExtras && <div style={{ height: 1, background: 'var(--border)' }} />}
-        {foodBox && (
-          <label
-            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text)', cursor: 'pointer' }}
-            title="Add a food box to this room (+40 max food)"
-          >
-            <input
-              type="checkbox"
-              checked={!!roomFood[ri]}
-              onChange={(e) => setRoomFood((prev) => ({ ...prev, [ri]: e.target.checked }))}
-            />
-            Food box (+40 max food)
-          </label>
-        )}
-        {ownedIdols.length > 0 && (
-          <div>
-            <div style={{ fontSize: 11, color: 'var(--text-m)', marginBottom: 4 }}>Idols</div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {ownedIdols.map((idol) => {
-                const on = roomIdolsFor(ri).has(idol.id);
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {foodBox && (() => {
+            const state = roomFood[ri] ?? 0;
+            let btnStyle: CSSProperties;
+            if (state === 1) {
+              btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px', background: 'rgba(46,125,50,0.12)', color: '#2e7d32', border: '1px solid rgba(46,125,50,0.35)' };
+            } else if (state === -1) {
+              btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px', background: 'rgba(198,40,40,0.1)', color: '#c62828', border: '1px solid rgba(198,40,40,0.3)' };
+            } else {
+              btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px' };
+            }
+            return (
+              <button key="food" onClick={() => setRoomFood((prev) => {
+                const cur = prev[ri] ?? 0;
+                const next: 0 | 1 | -1 = cur === 0 ? 1 : cur === 1 ? -1 : 0;
+                return { ...prev, [ri]: next };
+              })} title="Force food box, exclude it, or neutral" style={btnStyle}>
+                Food Box
+              </button>
+            );
+          })()}
+          {ownedIdols.map((idol) => {
+                const placed = roomIdolsFor(ri).has(idol.id);
+                const ignored = roomExcludedFor(ri).has(idol.id);
+                let btnStyle: CSSProperties;
+                if (placed) {
+                  btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px', background: 'rgba(46,125,50,0.12)', color: '#2e7d32', border: '1px solid rgba(46,125,50,0.35)' };
+                } else if (ignored) {
+                  btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px', background: 'rgba(198,40,40,0.1)', color: '#c62828', border: '1px solid rgba(198,40,40,0.3)' };
+                } else {
+                  btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px' };
+                }
                 return (
                   <button
                     key={idol.id}
                     onClick={() => toggleRoomIdol(ri, idol.id)}
                     title={idolNote(idol)}
-                    style={{ ...smallBtn, fontSize: 11, padding: '3px 9px', ...(on ? { background: 'var(--accent-bg)', color: 'var(--accent)', border: '1px solid var(--accent)' } : {}) }}
+                    style={btnStyle}
                   >
                     {idol.name}
                   </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-        {!hasExtras && choice !== 'custom' && (
-          <div style={{ fontSize: 12, color: 'var(--text-m)' }}>No idols or food boxes owned — nothing extra to add.</div>
+                  );
+                })}
+              </div>
+          {!hasExtras && choice !== 'custom' && (
+          <div style={{ fontSize: 11, color: 'var(--text-m)' }}>No idols or food boxes owned — nothing extra to add.</div>
         )}
       </div>
     );
@@ -632,6 +903,7 @@ export default function RoomDesignerWorkspace({
     e.target.value = '';
   };
 
+
   if (!visible) return <div style={containerStyle} />;
 
   return (
@@ -653,7 +925,7 @@ export default function RoomDesignerWorkspace({
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
-          flex: '1 1 360px',
+          flex: '7 1 360px',
           minWidth: 0,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
@@ -666,32 +938,104 @@ export default function RoomDesignerWorkspace({
                 ⌂ House
               </button>
             )}
-            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-h)' }}>Auto-fill</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-h)' }}>
+              Auto-fill
+            </span>
             <div style={{ flex: 1 }} />
-            {fillReport && fillProgress === null && fillSearch === null && (
-              <span style={{ fontSize: 11, color: 'var(--text-m)', flex: '0 1 auto', minWidth: 0 }} title={fillReport}>
-                {fillReport}
-              </span>
-            )}
-            <label
-              style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text)', cursor: fillSearch === null ? 'pointer' : 'default', whiteSpace: 'nowrap' }}
-              title="Keep trying new layouts until you click “Use best result”. Best score only improves."
-            >
-              <input
-                type="checkbox"
-                checked={keepSearching}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+              {(['fast', 'medium', 'long', 'extraLong'] as const).map((mode) => {
+                const active = useV2 ? v2PresetKey === mode : searchMode === mode;
+                const label = mode === 'extraLong' ? 'Extra Long' : mode.charAt(0).toUpperCase() + mode.slice(1);
+                return (
+                <button
+                  key={mode}
+                  disabled={fillProgress !== null || fillSearch !== null}
+                  onClick={() => {
+                    if (useV2) {
+                      setV2Settings({ ...DEFAULT_V2_SETTINGS, ...V2_PRESETS[mode] });
+                      setV2PresetKey(mode);
+                    } else {
+                      setSearchMode(mode);
+                    }
+                  }}
+                  title={
+                    useV2
+                      ? `V2 preset: ${label}`
+                      : mode === 'fast'
+                      ? 'Original: single pass, deterministic'
+                      : mode === 'medium'
+                      ? 'Fast: 5 passes, fixed room order'
+                      : mode === 'long'
+                      ? 'Balanced: up to 15 passes, adaptive exit'
+                      : 'Thorough: all 120 room orders, best overall'
+                  }
+                  style={{
+                    fontSize: 11,
+                    padding: '3px 8px',
+                    borderRadius: 4,
+                    border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    background: active ? 'var(--accent-bg)' : 'var(--bg)',
+                    color: active ? 'var(--accent)' : 'var(--text-h)',
+                    fontWeight: active ? 600 : 400,
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font)',
+                    opacity: fillProgress !== null || fillSearch !== null ? 0.6 : 1,
+                  }}
+                >
+                  {label}
+                </button>
+                );
+              })}
+              <span style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 4px' }} />
+              <button
                 disabled={fillProgress !== null || fillSearch !== null}
-                onChange={(e) => setKeepSearching(e.target.checked)}
-              />
-              Keep searching
-            </label>
-            {fillSearch !== null && (
+                onClick={() => {
+                  setUseV2(v => !v);
+                  if (useV2) setSearchMode('fast');
+                }}
+                title={useV2 ? 'Using Fill v2 (enablement-aware algorithm)' : 'Using Fill v1 (original maximize algorithm)'}
+                style={{
+                  fontSize: 11,
+                  padding: '3px 8px',
+                  borderRadius: 4,
+                  border: useV2 ? '1px solid var(--accent)' : '1px solid var(--border)',
+                  background: useV2 ? 'var(--accent-bg)' : 'var(--bg)',
+                  color: useV2 ? 'var(--accent)' : 'var(--text-h)',
+                  fontWeight: useV2 ? 600 : 400,
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font)',
+                  opacity: fillProgress !== null || fillSearch !== null ? 0.6 : 1,
+                }}
+              >
+                v{useV2 ? '2' : '1'}
+              </button>
+              <button
+                disabled={fillProgress !== null || fillSearch !== null}
+                onClick={() => setSettingsOpen(true)}
+                title="Fill settings"
+                style={{
+                  fontSize: 14,
+                  padding: '3px 6px',
+                  borderRadius: 4,
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg)',
+                  color: 'var(--text-m)',
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font)',
+                  lineHeight: 1,
+                  opacity: fillProgress !== null || fillSearch !== null ? 0.6 : 1,
+                }}
+              >
+                ⚙
+              </button>
+            </div>
+            {(fillProgress !== null || fillSearch !== null) && (
               <button
                 style={{ ...smallBtn, background: 'var(--accent-bg)', color: 'var(--accent)', border: '1px solid var(--accent)', fontWeight: 600 }}
                 onClick={onStopSearch}
-                title="Stop searching and keep the best layout found so far"
+                title="Stop filling and keep the best layout found so far"
               >
-                Use best result
+                Stop
               </button>
             )}
             <button
@@ -709,7 +1053,7 @@ export default function RoomDesignerWorkspace({
               }}
               disabled={!fillReady || fillProgress !== null || fillSearch !== null}
               onClick={handleAutoFill}
-              title={fillReady ? `Fill ${getRoomLabel(activeRoom)}` : 'Set at least one stat to maximize'}
+              title={fillReady ? 'Fill all rooms' : 'Set at least one stat to maximize'}
             >
               {fillProgress !== null && (
                 <span style={{
@@ -725,31 +1069,70 @@ export default function RoomDesignerWorkspace({
                 ? `Searching… best ${fillSearch.bestScore} · pass ${fillSearch.passes}`
                 : fillProgress !== null
                   ? `Optimizing … ${Math.round(fillProgress * 100)}%`
-                  : `Fill ${getRoomLabel(activeRoom)}`}
+                  : 'Fill'}
             </button>
           </div>
+          {fillReport && fillProgress === null && fillSearch === null && (
+            <div style={{ fontSize: 11, color: 'var(--text-m)', lineHeight: 1.4 }} title={fillReport}>
+              {fillReport}
+            </div>
+          )}
           {activeRoom === HOUSE_VIEW ? (
             <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
               {/* MASTER: compact room list */}
-              <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {unlockedRooms.map((ri) => {
+              <div style={{ flex: '3 1 200px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {(() => {
+                  const activeOrder = [...unlockedRooms].sort((a, b) => {
+                    const ia = priorityOrder.indexOf(a);
+                    const ib = priorityOrder.indexOf(b);
+                    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+                  });
+                  return activeOrder.map((ri) => {
                   const choice = roomChoice(ri);
                   const selected = drawerRoom === ri;
                   const idolCount = choice === 'skip' ? 0 : roomIdolsFor(ri).size;
-                  const hasFood = choice !== 'skip' && !!roomFood[ri] && !!foodBox;
+                  const foodState: 0 | 1 | -1 = choice !== 'skip' ? (roomFood[ri] ?? 0) : 0;
+                  const hasFood = foodState !== 0 && !!foodBox;
                   const minStats = choice !== 'custom' && choice !== 'skip' ? FILL_PRESETS[choice].minStats : undefined;
+                  const pos = activeOrder.indexOf(ri);
+                  const canUp = pos > 0;
+                  const canDown = pos < activeOrder.length - 1;
+                  const moveUp = (e: React.MouseEvent) => {
+                    e.stopPropagation();
+                    setPriorityOrder((prev) => {
+                      const idx = prev.indexOf(ri);
+                      if (idx <= 0) return prev;
+                      const next = [...prev];
+                      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                      return next;
+                    });
+                  };
+                  const moveDown = (e: React.MouseEvent) => {
+                    e.stopPropagation();
+                    setPriorityOrder((prev) => {
+                      const idx = prev.indexOf(ri);
+                      if (idx < 0 || idx >= prev.length - 1) return prev;
+                      const next = [...prev];
+                      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+                      return next;
+                    });
+                  };
                   return (
                     <div
                       key={ri}
                       onClick={() => setDetailRoom(ri)}
                       title={`Edit ${getRoomLabel(ri)}`}
                       style={{
-                        display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', borderRadius: 8, cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', borderRadius: 8, cursor: 'pointer',
                         border: `1px solid ${selected ? 'var(--accent)' : 'transparent'}`,
                         background: selected ? 'var(--accent-bg)' : 'transparent',
                       }}
                     >
-                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-h)', width: 52, flexShrink: 0 }}>{getRoomLabel(ri)}</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 0, flexShrink: 0, marginRight: 2 }}>
+                        <button onClick={canUp ? moveUp : undefined} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 12, height: 10, padding: 0, border: 'none', background: 'transparent', color: canUp ? 'var(--text-m)' : 'transparent', cursor: canUp ? 'pointer' : 'default', fontSize: 8, lineHeight: 1 }} title="Move up (higher priority)">{'\u25B2'}</button>
+                        <button onClick={canDown ? moveDown : undefined} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 12, height: 10, padding: 0, border: 'none', background: 'transparent', color: canDown ? 'var(--text-m)' : 'transparent', cursor: canDown ? 'pointer' : 'default', fontSize: 8, lineHeight: 1 }} title="Move down (lower priority)">{'\u25BC'}</button>
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-h)', width: 48, flexShrink: 0 }}>{getRoomLabel(ri)}</span>
                       <select
                         value={choice}
                         onClick={(e) => e.stopPropagation()}
@@ -778,16 +1161,21 @@ export default function RoomDesignerWorkspace({
                       <span style={{ flex: 1, minWidth: 0, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                         {choice === 'skip'
                           ? <span style={{ fontSize: 11, color: 'var(--text-m)' }}>keeps current layout</span>
-                          : renderWeightSummary(roomEffectiveWeights(ri), minStats)}
-                        {hasFood && <span title="A food box is forced into this room" style={{ display: 'inline-flex', alignItems: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text-m)', border: '1px solid currentColor', borderRadius: 4, padding: '0 4px', lineHeight: '15px' }}>FOOD</span>}
+                          : choice === 'random'
+                            ? <span style={{ fontSize: 11, color: 'var(--text-m)' }}>dense fill, any items</span>
+                            : renderWeightSummary(roomEffectiveWeights(ri), minStats)}
+                        {hasFood && (foodState === 1
+                          ? <span title="A food box is forced into this room" style={{ display: 'inline-flex', alignItems: 'center', fontSize: 12, fontWeight: 700, color: '#2e7d32', border: '1px solid rgba(46,125,50,0.35)', borderRadius: 4, padding: '0 4px', lineHeight: '15px' }}>FOOD</span>
+                          : <span title="Food box excluded from this room" style={{ display: 'inline-flex', alignItems: 'center', fontSize: 12, fontWeight: 700, color: '#c62828', border: '1px solid rgba(198,40,40,0.3)', borderRadius: 4, padding: '0 4px', lineHeight: '15px' }}>FOOD</span>
+                        )}
                         {idolCount > 0 && <span title={`${idolCount} idol(s) selected`} style={{ display: 'inline-flex', alignItems: 'center', gap: 1, fontSize: 12, fontWeight: 700, color: 'var(--blushed-brick)', border: '1px solid currentColor', borderRadius: 4, padding: '0 4px', lineHeight: '15px' }}>{'\u2605'}{idolCount > 1 ? ` ${idolCount}` : ''}</span>}
                       </span>
                     </div>
                   );
-                })}
+                })})()}
               </div>
               {/* DETAIL: stable editor for the selected room */}
-              <div style={{ flex: '0 1 280px', minWidth: 240, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
+              <div style={{ flex: '5 1 220px', minWidth: 180, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 10 }}>
                 {renderRoomDrawer(drawerRoom)}
               </div>
             </div>
@@ -835,43 +1223,49 @@ export default function RoomDesignerWorkspace({
               <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
               {/* EXTRAS — food + idols */}
               <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontWeight: 700, fontSize: 11, letterSpacing: '0.06em', color: 'var(--lavender-grey)', textTransform: 'uppercase', marginRight: 2 }}>Extras</span>
-                <label
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: foodBox ? 'var(--text)' : 'var(--text-m)', cursor: foodBox ? 'pointer' : 'not-allowed' }}
-                  title={foodBox ? 'Force all owned Food Boxes into the layout (+40 max food each)' : 'No Food Box owned'}
-                >
-                  <input
-                    type="checkbox"
-                    disabled={!foodBox}
-                    checked={includeFood && !!foodBox}
-                    onChange={(e) => setIncludeFood(e.target.checked)}
-                  />
-                  Include food storage
-                </label>
+                <span style={{ fontWeight: 700, fontSize: 11, letterSpacing: '0.06em', color: 'var(--lavender-grey)', textTransform: 'uppercase' }}>Extras</span>
+                {foodBox && (() => {
+                  const state = foodTolerance;
+                  let btnStyle: CSSProperties;
+                  let label: string;
+                  if (state === 'maximize') {
+                    btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px', background: 'rgba(46,125,50,0.12)', color: '#2e7d32', border: '1px solid rgba(46,125,50,0.35)' };
+                    label = 'Food Box';
+                  } else if (state === 'minimize') {
+                    btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px', background: 'rgba(198,40,40,0.1)', color: '#c62828', border: '1px solid rgba(198,40,40,0.3)' };
+                    label = 'Food Box';
+                  } else {
+                    btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px' };
+                    label = 'Food Box';
+                  }
+                  return (
+                    <button key="food" onClick={toggleFood} title="Force food box into the room, exclude it, or neutral" style={btnStyle}>
+                      {label}
+                    </button>
+                  );
+                })()}
                 {idols.map((idol) => {
                   const owned = (ownership[idol.id] || 0) > 0;
+                  const placed = selectedIdols.has(idol.id);
+                  const ignored = excludedIdols.has(idol.id);
+                  let btnStyle: CSSProperties;
+                  if (placed) {
+                    btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px', background: 'rgba(46,125,50,0.12)', color: '#2e7d32', border: '1px solid rgba(46,125,50,0.35)', cursor: owned ? 'pointer' : 'not-allowed' };
+                  } else if (ignored) {
+                    btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px', background: 'rgba(198,40,40,0.1)', color: '#c62828', border: '1px solid rgba(198,40,40,0.3)', cursor: owned ? 'pointer' : 'not-allowed' };
+                  } else {
+                    btnStyle = { ...smallBtn, fontSize: 11, padding: '3px 9px', cursor: owned ? 'pointer' : 'not-allowed', opacity: owned ? 1 : 0.55 };
+                  }
                   return (
-                    <label
+                    <button
                       key={idol.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        fontSize: 12,
-                        color: owned ? 'var(--text)' : 'var(--text-m)',
-                        cursor: owned ? 'pointer' : 'not-allowed',
-                        opacity: owned ? 1 : 0.55,
-                      }}
+                      disabled={!owned}
+                      onClick={() => owned && toggleIdol(idol.id)}
                       title={owned ? idolNote(idol) : `Not purchased \u2014 ${idolNote(idol)}`}
+                      style={btnStyle}
                     >
-                      <input
-                        type="checkbox"
-                        disabled={!owned}
-                        checked={owned && selectedIdols.has(idol.id)}
-                        onChange={() => toggleIdol(idol.id)}
-                      />
                       {idol.name}
-                    </label>
+                    </button>
                   );
                 })}
               </div>
@@ -879,7 +1273,7 @@ export default function RoomDesignerWorkspace({
           )}
         </div>
         <div style={{
-          flex: '1 1 360px',
+          flex: '3 1 360px',
           minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
@@ -902,6 +1296,15 @@ export default function RoomDesignerWorkspace({
               onActiveRoomChange={onActiveRoomChange}
               ownership={ownership}
               isRoomUnlocked={isRoomUnlocked}
+              roomWeights={roomWeights}
+              allFurniture={allFurniture}
+              roomFunctions={Object.fromEntries(
+                [4, 0, 1, 2, 3].filter(i => i < rooms.length).map(i => {
+                  const choice = roomChoice(i);
+                  return [i, choice === 'custom' ? 'Custom' : choice !== 'skip' ? FILL_PRESETS[choice].label : ''];
+                })
+              )}
+              priorityOrder={priorityOrder}
             />
           </div>
         </div>
@@ -955,6 +1358,8 @@ export default function RoomDesignerWorkspace({
                 setChecklistOpen(true);
                 setHoverItem(id);
               }}
+              expertView={expertView}
+              checklistOpen={checklistOpen}
             />
           ) : (
             <RoomGrid
@@ -971,6 +1376,7 @@ export default function RoomDesignerWorkspace({
                 setChecklistOpen(true);
                 setHoverItem(id);
               }}
+              checklistOpen={checklistOpen}
             />
           )}
         </div>
@@ -982,44 +1388,6 @@ export default function RoomDesignerWorkspace({
             hoverItemId={hoverItem}
             onHoverItem={handleHoverItem}
           />
-        )}
-        {hoverTip && (
-          <div style={{
-            position: 'absolute',
-            left: hoverTip.x,
-            top: hoverTip.y - 8,
-            transform: 'translate(-50%, -100%)',
-            background: 'var(--charcoal)',
-            color: '#fff',
-            fontSize: 12,
-            fontWeight: 600,
-            fontFamily: 'var(--font)',
-            padding: '4px 10px',
-            borderRadius: 8,
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none',
-            zIndex: 40,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
-            // dark pill: stat icons must always render white
-            ['--icon-invert' as string]: 'invert(1)',
-          } as CSSProperties}>
-            <div style={{ textAlign: 'center' }}>{hoverTip.text}</div>
-            {hoverTip.item && (
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 2, fontSize: 11, fontWeight: 700 }}>
-                {ALL_STATS.filter((st) => hoverTip.item![st] !== 0).map((st) => {
-                  const v = hoverTip.item![st];
-                  const fmt = (n: number) => (n > 0 ? `+${n}` : `${n}`);
-                  return (
-                    <span key={st} style={{ color: STAT_COLORS[st], display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                      <StatIcon stat={st} size={12} />
-                      {/* per item; with multiple copies also the room total */}
-                      {hoverTip.count > 1 ? `${fmt(v)} (${fmt(v * hoverTip.count)})` : fmt(v)}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         )}
         {connectorLines.length > 0 && (
           <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 30 }}>
@@ -1108,6 +1476,220 @@ export default function RoomDesignerWorkspace({
           </button>
         </div>
       </div>
+
+      {/* ─── Settings Modal ─── */}
+      {settingsOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.5)',
+          }}
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--bg)',
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              padding: '16px 20px',
+              maxWidth: 1500,
+              width: '90vw',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+              color: 'var(--text-h)',
+              fontSize: 13,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 700, fontSize: 15 }}>Fill Settings</span>
+              <button
+                onClick={() => setSettingsOpen(false)}
+                style={{
+                  background: 'none', border: 'none', color: 'var(--text-m)',
+                  cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '2px 6px',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* ── Food section (house-level) ── */}
+            {foodBox && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <span style={{ fontWeight: 600, fontSize: 11, letterSpacing: '0.06em', color: 'var(--lavender-grey)', textTransform: 'uppercase' }}>Food Box</span>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {(['auto', 'maximize', 'minimize'] as const).map((opt) => (
+                  <button
+                    key={opt}
+                    onClick={() => setFoodTolerance(opt)}
+                    style={{
+                      fontSize: 11, padding: '3px 9px', borderRadius: 4,
+                      border: foodTolerance === opt ? '1px solid var(--accent)' : '1px solid var(--border)',
+                      background: foodTolerance === opt ? 'var(--accent-bg)' : 'var(--bg)',
+                      color: foodTolerance === opt ? 'var(--accent)' : 'var(--text-h)',
+                      fontWeight: foodTolerance === opt ? 600 : 400,
+                      cursor: 'pointer',
+                      fontFamily: 'var(--font)',
+                    }}
+                  >
+                    {opt === 'auto' ? 'Auto' : opt === 'maximize' ? 'Maximize' : 'Minimize'}
+                  </button>
+                ))}
+              </div>
+            </div>}
+
+
+            {/* ── V2 algorithm settings ── */}
+            {useV2 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <span style={{ fontWeight: 600, fontSize: 11, letterSpacing: '0.06em', color: 'var(--lavender-grey)', textTransform: 'uppercase' }}>
+                V2 Algorithm — Fine Tuning
+              </span>
+              {([
+                { label: 'Sort — Enablement', key: 'sortEnablementWeight' as const, min: 0, max: 1, step: 0.01, desc: 'Weight for ordering candidates by how many other items they enable when placed. Higher = prioritise items that unlock neighbours.' },
+                { label: 'Sort — Irregularity', key: 'sortIrregularityWeight' as const, min: 0, max: 1, step: 0.01, desc: 'How much to favour irregularly-shaped items over plain rectangles. Useful when filling odd-shaped corners of a room.' },
+                { label: 'Sort — Score', key: 'sortScoreWeight' as const, min: 0, max: 1, step: 0.01, desc: 'How strongly raw stat score influences candidate ordering. Higher = always try the highest-stat item first.' },
+                { label: 'Sort — Efficiency', key: 'sortEfficiencyWeight' as const, min: 0, max: 1, step: 0.01, desc: 'Preference for items with a high stat-per-tile ratio. Higher = cram more stats into limited space.' },
+                { label: 'Sort — Lego Bonus', key: 'sortLegoBonus' as const, min: 0, max: 1, step: 0.01, desc: 'Extra weight for items whose shape lets them interlock with previously placed pieces. Higher = denser packing.' },
+                { label: 'Sort — Size', key: 'sortSizeWeight' as const, min: -1, max: 1, step: 0.01, desc: 'Preference for item size during sorting. Positive = place large items first (claim floor space), negative = small items first (fill gaps). Zero = neutral.' },
+                { label: 'Best-Fit — Corner', key: 'bestFitCornerWeight' as const, min: 0, max: 5, step: 0.1, desc: 'How much the algorithm tries to place items in corner cells. Higher = fill corners first before moving to edges.' },
+                { label: 'Best-Fit — Edge', key: 'bestFitEdgeWeight' as const, min: 0, max: 5, step: 0.1, desc: 'How much the algorithm tries to place items along room edges. Higher = wall-hugging layout.' },
+                { label: 'Best-Fit — Anchor Exposure', key: 'bestFitAnchorExposureWeight' as const, min: 0, max: 5, step: 0.1, desc: 'Penalty weighting for leaving anchor points (hanging spots) exposed without their paired piece. Lower = more tolerance for unpaired anchors.' },
+                { label: 'Best-Fit — Hollow Access', key: 'bestFitHollowAccessWeight' as const, min: 0, max: 5, step: 0.1, desc: 'Bonus for placing items that create accessible hollows or alcoves. Higher = more organically-shaped layouts.' },
+                { label: 'Best-Fit — Vertical', key: 'bestFitVerticalWeight' as const, min: 0, max: 5, step: 0.1, desc: 'Weight for stacking items vertically. Higher = prefer tall arrangements over spreading horizontally.' },
+                { label: 'Best-Fit — Fragmentation Penalty', key: 'bestFitFragmentationPenalty' as const, min: -5, max: 0, step: 0.1, desc: 'How much to penalise layouts that leave many small disconnected gaps. More negative = strongly prefer contiguous blocks.' },
+                { label: 'Coverage Bonus', key: 'coverageBonus' as const, min: 0, max: 5, step: 0.1, desc: 'Bonus for covering a larger fraction of the room floor. Higher = fill every possible tile before stopping.' },
+                { label: 'Enablement — Filler', key: 'enablementFillerWeight' as const, min: 0, max: 5, step: 0.1, desc: 'Weight given to items that act as filler in enablement chains — pieces that sit between enablement sources and targets.' },
+                { label: 'Enablement — Hanger', key: 'enablementHangerWeight' as const, min: 0, max: 5, step: 0.1, desc: 'Weight for hanging-type items in enablement scoring. Higher = prefer furniture that hangs from anchors.' },
+                { label: 'Enablement — Lego Bonus', key: 'legoBonusWeight' as const, min: 0, max: 5, step: 0.1, desc: 'Extra scoring weight for items that form lego-style connections (tab-and-slot shapes). Higher = chain more connected pieces.' },
+                { label: 'Ruin Sparse Ratio', key: 'ruinSparseRatio' as const, min: 0, max: 1, step: 0.01, desc: 'Occupancy threshold below which a partial layout is considered sparse enough to tear down and retry. Lower = more willing to scrap and rebuild.' },
+                { label: 'Temperature', key: 'temperature' as const, min: 0, max: 2, step: 0.01, desc: 'Randomness in candidate ordering. 0 = fully deterministic (same inputs always produce the same layout). Higher = more variety in placements.' },
+                { label: 'Max Iterations', key: 'defaultMaximizeIterations' as const, min: 1, max: 850, step: 1, desc: 'Maximum search iterations per room. Higher = potentially better layouts but slower. 100 is a good balance.' },
+              ]).map(({ label, key, min, max, step, desc }) => (
+                <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-m)', width: 160, flexShrink: 0 }}>{label}</span>
+                  <input
+                    type="range"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={v2Settings[key]}
+                    onChange={(e) => {
+                      const next = { ...v2Settings, [key]: parseFloat(e.target.value) };
+                      const v2Keys = Object.keys(DEFAULT_V2_SETTINGS) as (keyof typeof DEFAULT_V2_SETTINGS)[];
+                      const allDefaults = v2Keys.every(
+                        k => next[k] === DEFAULT_V2_SETTINGS[k]
+                      );
+                      if (allDefaults) {
+                        setV2PresetKey('fast');
+                      } else {
+                        const matched = Object.entries(V2_PRESETS).find(([pName, preset]) => {
+                          if (pName === 'fast') return false;
+                          const merged = { ...DEFAULT_V2_SETTINGS, ...preset };
+                          return (Object.keys(merged) as (keyof typeof merged)[]).every(k => next[k] === merged[k]);
+                        });
+                        setV2PresetKey(matched ? matched[0] as 'fast' | 'medium' | 'long' | 'extraLong' : 'custom');
+                      }
+                      setV2Settings(next);
+                    }}
+                    style={{ flex: 1, accentColor: 'var(--accent)' }}
+                  />
+                  <span style={{
+                    fontSize: 11, color: 'var(--text-h)',
+                    fontWeight: 600, width: 60, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    {v2Settings[key]}
+                  </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-m)', lineHeight: 1.4, paddingLeft: 168 }}>{desc}</div>
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+                <button
+                  onClick={() => {
+                    setV2Settings({ ...DEFAULT_V2_SETTINGS });
+                    setV2PresetKey('fast');
+                  }}
+                  style={{
+                    fontSize: 11, padding: '4px 10px', borderRadius: 4,
+                    border: '1px solid var(--border)', background: 'var(--bg)',
+                    color: 'var(--text-m)', cursor: 'pointer', fontFamily: 'var(--font)',
+                  }}
+                >
+                  Reset defaults
+                </button>
+                <button
+                  onClick={() => {
+                    const data = JSON.stringify(v2Settings, null, 2);
+                    const blob = new Blob([data], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'mg-clawset-v2-settings.json';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  style={{
+                    fontSize: 11, padding: '4px 10px', borderRadius: 4,
+                    border: '1px solid var(--border)', background: 'var(--bg)',
+                    color: 'var(--text-h)', cursor: 'pointer', fontFamily: 'var(--font)',
+                  }}
+                >
+                  Export settings
+                </button>
+                <button
+                  onClick={() => document.getElementById('v2-import-input')?.click()}
+                  style={{
+                    fontSize: 11, padding: '4px 10px', borderRadius: 4,
+                    border: '1px solid var(--border)', background: 'var(--bg)',
+                    color: 'var(--text-h)', cursor: 'pointer', fontFamily: 'var(--font)',
+                  }}
+                >
+                  Import settings
+                </button>
+                <input
+                  id="v2-import-input"
+                  type="file"
+                  accept=".json"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      try {
+                        const parsed = JSON.parse(reader.result as string);
+                        const v2Keys = Object.keys(DEFAULT_V2_SETTINGS) as (keyof typeof DEFAULT_V2_SETTINGS)[];
+                        const valid = v2Keys.every(k => typeof parsed[k] === 'number');
+                        if (!valid) { alert('Invalid settings file: missing or non-numeric values.'); return; }
+                        const allDefaults = v2Keys.every(k => parsed[k] === DEFAULT_V2_SETTINGS[k]);
+                        if (allDefaults) { setV2PresetKey('fast'); }
+                        else {
+                          const matched = Object.entries(V2_PRESETS).find(([pName, preset]) => {
+                            if (pName === 'fast') return false;
+                            const merged = { ...DEFAULT_V2_SETTINGS, ...preset };
+                            return v2Keys.every(k => parsed[k] === merged[k]);
+                          });
+                          setV2PresetKey(matched ? matched[0] as 'fast' | 'medium' | 'long' | 'extraLong' : 'custom');
+                        }
+                        setV2Settings(parsed);
+                      } catch { alert('Invalid JSON file.'); }
+                    };
+                    reader.readAsText(file);
+                    e.target.value = '';
+                  }}
+                />
+              </div>
+            </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

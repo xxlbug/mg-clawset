@@ -385,10 +385,10 @@ function App() {
     const { algorithm, plans, searchMode } = config;
     if (plans.length === 0) return;
     const makeInstanceId = () => `placed-${nextInstanceId++}`;
-    // theorycrafting without a savegame: the whole in-game catalog is available
+    // theorycrafting without a savegame: use zero copies (no items to place)
     const effectiveOwnership = hasOwnership
       ? ownership
-      : Object.fromEntries(allFurniture.map((it) => [it.id, 9]));
+      : {};
 
     const roomCapacity = (ri: number) => {
       const cfg = getRoomConfig(ri);

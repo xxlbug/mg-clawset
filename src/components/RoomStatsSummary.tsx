@@ -218,7 +218,7 @@ export default function RoomStatsSummary({ rooms, activeRoom, onActiveRoomChange
   const maxRow = allFurniture ? (
     <div style={{ marginTop: 2 }}>
       <div style={{ height: 1, background: 'var(--border)', margin: '4px 0 2px', opacity: 0.4 }} />
-      <StatRow label="Max" totals={maxTotals} count="theoretical max" variant="max" />
+      <StatRow label="Max" totals={maxTotals} count="theoretical max/attic" variant="max" />
     </div>
   ) : null;
 

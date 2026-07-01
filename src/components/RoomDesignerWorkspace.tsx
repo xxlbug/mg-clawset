@@ -276,6 +276,40 @@ export default function RoomDesignerWorkspace({
     priorityOrder, statWeights, includeFood, houseFoodLimit, searchMode, selectedIdols, excludedIdols, roomExcluded,
   ]);
 
+  const handleHoverItem = (id: string | null) => {
+    setHoverItem(id);
+  };
+
+  // Load a preset as an editable starting point: its stats fill the chips and
+  // its floor/idol travel with it (kept even after the user edits the stats).
+  // Also saves the preset choice to the current room's personal template.
+  const applyPreset = (key: FillPresetKey) => {
+    const preset = FILL_PRESETS[key];
+    setPresetKey(key);
+    setPresetModified(false);
+    setStatWeights({ ...EMPTY_WEIGHTS, ...preset.tristate });
+    const autoIds = preset.autoIdolKeys
+      ?.map((k) => idols.find((i) => i.image_url.includes(k) && (ownership[i.id] || 0) > 0))
+      .filter((i): i is FurnitureItem => !!i)
+      .map((i) => i.id) ?? [];
+    setSelectedIdols(new Set(autoIds));
+    const excludeIds = preset.excludeIdolKeys
+      ?.map((k) => idols.find((i) => i.image_url.includes(k) && (ownership[i.id] || 0) > 0))
+      .filter((i): i is FurnitureItem => !!i)
+      .map((i) => i.id) ?? [];
+    setExcludedIdols(new Set(excludeIds));
+    if (activeRoom !== HOUSE_VIEW) {
+      setRoomPresets((prev) => ({ ...prev, [activeRoom]: key }));
+    }
+  };
+
+  // Start from zero: no stats, no floor.
+  const selectBlank = () => {
+    setPresetKey('blank');
+    setPresetModified(false);
+    setStatWeights({ ...EMPTY_WEIGHTS });
+  };
+
   // Sync the master preset with the room's personal template when opening a room.
   useEffect(() => {
     if (activeRoom === HOUSE_VIEW) return;
@@ -288,7 +322,7 @@ export default function RoomDesignerWorkspace({
       setStatWeights({ ...(roomWeights[activeRoom] ?? EMPTY_WEIGHTS) });
       setSelectedIdols(new Set(roomIdols[activeRoom]));
     }
-  }, [activeRoom]);
+  }, [activeRoom, roomPresets, roomWeights, roomIdols]);
 
   // Thin connector lines from the hovered checklist row to every matching placed piece
   useLayoutEffect(() => {
@@ -323,8 +357,6 @@ export default function RoomDesignerWorkspace({
     return () => cancelAnimationFrame(id);
   }, [hoverItem, checklistOpen, placed]);
 
-
-
   // Legend numbers: alphabetical unique items of the active room (matches checklist order)
   const labelNumbers = useMemo(() => {
     const ids = [...new Map(placed.map((p) => [p.item.id, p.item.name])).entries()]
@@ -334,42 +366,6 @@ export default function RoomDesignerWorkspace({
     ids.forEach((id, i) => { map[id] = i + 1; });
     return map;
   }, [placed]);
-
-
-
-  const handleHoverItem = (id: string | null) => {
-    setHoverItem(id);
-  };
-
-  // Load a preset as an editable starting point: its stats fill the chips and
-  // its floor/idol travel with it (kept even after the user edits the stats).
-  // Also saves the preset choice to the current room's personal template.
-  const applyPreset = (key: FillPresetKey) => {
-    const preset = FILL_PRESETS[key];
-    setPresetKey(key);
-    setPresetModified(false);
-    setStatWeights({ ...EMPTY_WEIGHTS, ...preset.tristate });
-    const autoIds = preset.autoIdolKeys
-      ?.map((k) => idols.find((i) => i.image_url.includes(k) && (ownership[i.id] || 0) > 0))
-      .filter((i): i is FurnitureItem => !!i)
-      .map((i) => i.id) ?? [];
-    setSelectedIdols(new Set(autoIds));
-    const excludeIds = preset.excludeIdolKeys
-      ?.map((k) => idols.find((i) => i.image_url.includes(k) && (ownership[i.id] || 0) > 0))
-      .filter((i): i is FurnitureItem => !!i)
-      .map((i) => i.id) ?? [];
-    setExcludedIdols(new Set(excludeIds));
-    if (activeRoom !== HOUSE_VIEW) {
-      setRoomPresets((prev) => ({ ...prev, [activeRoom]: key }));
-    }
-  };
-
-  // Start from zero: no stats, no floor.
-  const selectBlank = () => {
-    setPresetKey('blank');
-    setPresetModified(false);
-    setStatWeights({ ...EMPTY_WEIGHTS });
-  };
 
   // Editing a stat keeps the active preset's floor/idol but marks it modified.
   const cycleStat = (stat: StatKey) => {

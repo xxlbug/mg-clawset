@@ -24,12 +24,26 @@ const loadBtn: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+const secondaryBtn: CSSProperties = {
+  padding: '7px 18px',
+  borderRadius: 8,
+  background: 'transparent',
+  color: 'var(--text)',
+  fontWeight: 500,
+  fontSize: 13,
+  border: '1px solid var(--border)',
+  cursor: 'pointer',
+  fontFamily: 'var(--font)',
+  whiteSpace: 'nowrap',
+};
+
 export type AppView = 'house' | 'furniture' | 'breeding';
 
 interface Props {
   /** Logo click: back to the house overview. */
   onHome: () => void;
   onLoadSavegame: () => void;
+  onTestMode?: () => void;
   hasOwnership: boolean;
   savefileName: string | null;
   reloading: boolean;
@@ -52,7 +66,7 @@ const tabBtn = (active: boolean): CSSProperties => ({
 });
 
 /** Persistent top bar: mascot (help), title, view tabs, always-reachable savegame import. */
-export default function AppHeader({ onHome, onLoadSavegame, hasOwnership, savefileName, reloading, view, onViewChange }: Props) {
+export default function AppHeader({ onHome, onLoadSavegame, onTestMode, hasOwnership, savefileName, reloading, view, onViewChange }: Props) {
   return (
     <div style={bar}>
       <div style={{ width: 56, flexShrink: 0, cursor: 'pointer' }} title="Back to the house view" onClick={onHome}>
@@ -80,6 +94,15 @@ export default function AppHeader({ onHome, onLoadSavegame, hasOwnership, savefi
         </div>
       )}
       <div style={{ flex: 1 }} />
+      {onTestMode && (
+        <button
+          style={secondaryBtn}
+          onClick={onTestMode}
+          title="Generate a fake inventory to test auto-fill"
+        >
+          Test Mode
+        </button>
+      )}
       <button
         style={{ ...loadBtn, opacity: reloading ? 0.6 : 1 }}
         onClick={onLoadSavegame}

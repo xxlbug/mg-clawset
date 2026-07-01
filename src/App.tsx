@@ -1,18 +1,19 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
-import type { Filters, SortConfig, SortField, FurnitureItem, RawFurnitureItem, PlacedFurniture } from './types/furniture';
+import type { Filters, SortConfig, SortField, FurnitureItem, RawFurnitureItem, PlacedFurniture, StatKey } from './types/furniture';
 import { getRoomConfig, ATTIC_INDEX, HOUSE_VIEW } from './types/furniture';
 import furnitureData from './data/furniture_data.json';
 import SplitScreenContainer from './components/SplitScreenContainer';
 import FurnitureBrowser from './components/FurnitureBrowser';
 import RoomDesignerWorkspace from './components/RoomDesignerWorkspace';
 import SaveImportModal from './components/SaveImportModal';
+import TestModal from './components/TestModal';
 import AppHeader from './components/AppHeader';
 import WelcomeHero from './components/WelcomeHero';
 import BreedingGuide from './components/BreedingGuide';
 import { findAllAnchored, findAnchoredPieces, wouldCollide } from './utils/anchorHelpers';
 import { autoPopulateRoomAsync, autoPopulateRoom, statScore, preAllocateItems, pushScore, isConverged } from './utils/autoPopulate';
-import type { AlgorithmKey, RoomFillPlan } from './utils/autoPopulate';
+import type { AlgorithmKey, StatWeights, RoomFillPlan } from './utils/autoPopulate';
 import type { AppView } from './components/AppHeader';
 import useIsMobile from './hooks/useIsMobile';
 import { parseSavegame } from './utils/savegame';
@@ -197,9 +198,11 @@ function App() {
   const [rooms, setRooms] = useState<PlacedFurniture[][]>(loadRooms);
   const [activeRoom, setActiveRoom] = useState(HOUSE_VIEW);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [testModalOpen, setTestModalOpen] = useState(false);
   const [statsPerSpace, setStatsPerSpace] = useState(false);
   const [savefileName, setSavefileName] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
+  const [testModeNonce, setTestModeNonce] = useState(0);
   const [houseInfo, setHouseInfo] = useState<HouseInfo | null>(loadHouseInfo);
   const [cats, setCats] = useState<ParsedCat[]>(loadCats);
   // 0..1 while an auto-fill search runs, null when idle
@@ -211,6 +214,7 @@ function App() {
   // flipped by "Use best result" to stop the keep-searching loop
   const stopSearchRef = useRef(false);
   const stopSearch = useCallback(() => { stopSearchRef.current = true; }, []);
+  const pendingTestPlansRef = useRef<RoomFillPlan[] | null>(null);
   const [view, setView] = useState<AppView>('house');
 
   const isRoomUnlocked = useCallback((i: number): boolean => {
@@ -663,6 +667,16 @@ function App() {
     }
   }, [rooms, ownership, hasOwnership, updateRooms]);
 
+  const autoFillRef = useRef(handleAutoPopulate);
+  autoFillRef.current = handleAutoPopulate;
+
+  useEffect(() => {
+    if (!pendingTestPlansRef.current) return;
+    const plans = pendingTestPlansRef.current;
+    pendingTestPlansRef.current = null;
+    autoFillRef.current({ algorithm: 'maximize', plans, searchMode: 'optimal' });
+  }, [testModeNonce]);
+
   const handleSortChange = useCallback((field: SortField) => {
     setSort((prev) => ({
       field,
@@ -684,15 +698,14 @@ function App() {
     if (newCats && newCats.length > 0) setCats(newCats);
     if (newOwnership) {
       setOwnership(newOwnership);
-      // After loading a savegame, show what the player actually owns
       setFilters((prev) => ({ ...prev, onlyOwned: true }));
-      // ...and get the drawer out of the way: the house is the main view now
       setDrawerOpen(false);
     }
     if (newHouseInfo) {
       setHouseInfo(newHouseInfo);
       localStorage.setItem(HOUSE_UNLOCKS_KEY, JSON.stringify(newHouseInfo));
     }
+    const emptyRooms: PlacedFurniture[][] = Array.from({ length: NUM_ROOMS }, () => []);
     if (placements) {
       const byId = new Map(allFurniture.map((f) => [f.id, f]));
       const newRooms: PlacedFurniture[][] = Array.from({ length: NUM_ROOMS }, () => []);
@@ -706,14 +719,112 @@ function App() {
         }));
       }
       updateRooms(newRooms);
-      setActiveRoom(HOUSE_VIEW);
+    } else {
+      updateRooms(emptyRooms);
     }
+    setActiveRoom(HOUSE_VIEW);
   }, [updateRooms]);
 
   const openImportModal = useCallback(() => {
     dismissHero();
     setImportModalOpen(true);
   }, [dismissHero]);
+
+  const handleTestMode = useCallback((itemCount: number, rarePercent: number, unlockedRooms: number) => {
+    const rare: FurnitureItem[] = [];
+    const common: FurnitureItem[] = [];
+    for (const item of allFurniture) {
+      const isRare = !!item.image_url?.includes('special_')
+        || item.appeal >= 4 || item.comfort >= 4 || item.stimulation >= 4
+        || item.health >= 4 || item.mutation >= 4;
+      (isRare ? rare : common).push(item);
+    }
+
+    const rng = (max: number) => Math.floor(Math.random() * max);
+    const pick = <T,>(arr: T[], n: number): T[] => {
+      const shuffled = [...arr];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = rng(i + 1);
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return shuffled.slice(0, Math.min(n, shuffled.length));
+    };
+
+    const rareTarget = Math.round(itemCount * (rarePercent / 100));
+    const commonTarget = itemCount - rareTarget;
+
+    const ownership: Record<string, number> = {};
+
+    for (const item of pick(rare, rareTarget)) {
+      ownership[item.id] = 1;
+    }
+    for (const item of pick(common, commonTarget)) {
+      ownership[item.id] = 1;
+    }
+
+    const duplicateBudget = Math.max(1, Math.round(Object.keys(ownership).length * 0.05));
+    const candidates = Object.keys(ownership).filter((id) => {
+      const item = allFurniture.find((f) => f.id === id);
+      return item && !item.image_url?.includes('special_');
+    });
+    for (let i = 0; i < duplicateBudget && candidates.length > 0; i++) {
+      const idx = rng(candidates.length);
+      const id = candidates[idx];
+      ownership[id] = 2;
+      candidates[idx] = candidates[candidates.length - 1];
+      candidates.pop();
+    }
+
+    const newHouseInfo: HouseInfo = {
+      atticUnlocked: unlockedRooms >= 2,
+      regularRooms: Math.max(1, Math.min(unlockedRooms - 1, 4)) as 1 | 2 | 3 | 4,
+    };
+
+    const foodBoxCount = itemCount >= 150 ? 10 : Math.max(3, Math.round(3 + (itemCount / 150) * 7));
+    if (foodBoxItem) ownership[foodBoxItem.id] = foodBoxCount;
+
+    // Room index: 0=Room1, 1=Room2, 2=Room3, 3=Room4, 4=Attic
+    const ROOM_PRESET_PATTERNS: Record<number, Record<number, string>> = {
+      2: { 4: 'breeding', 0: 'storage' },
+      3: { 4: 'breeding', 0: 'storage', 1: 'fightclub' },
+      4: { 4: 'breeding', 0: 'storage', 1: 'fightclub', 2: 'mutation' },
+      5: { 4: 'breeding', 0: 'breeding', 1: 'storage', 2: 'fightclub', 3: 'mutation' },
+    };
+    const pattern = ROOM_PRESET_PATTERNS[unlockedRooms] ?? {};
+    try {
+      const raw = localStorage.getItem('clawset-designer-workspace');
+      const ws = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+      ws.roomPresets = { ...pattern };
+      for (let i = 0; i < 4; i++) {
+        if (!(i in pattern)) (ws.roomPresets as Record<string, string>)[String(i)] = 'skip';
+      }
+      if (!(4 in pattern)) (ws.roomPresets as Record<string, string>)['4'] = 'skip';
+      localStorage.setItem('clawset-designer-workspace', JSON.stringify(ws));
+    } catch { /* best-effort */ }
+
+    const PRESET_PLAN: Record<string, { weights: StatWeights; minStats?: Partial<Record<StatKey, number>> }> = {
+      breeding: { weights: { stimulation: 1 } as StatWeights, minStats: { comfort: 4 } },
+      storage: { weights: { health: 1, comfort: 1, stimulation: -1 } as StatWeights },
+      fightclub: { weights: { comfort: -2, stimulation: -1 } as StatWeights },
+      mutation: { weights: { mutation: 1, stimulation: -1 } as StatWeights },
+    };
+    const roomPlans: RoomFillPlan[] = [];
+    const roomOrder = [4, 0, 1, 2, 3];
+    for (const ri of roomOrder) {
+      const presetName = pattern[ri];
+      if (!presetName) continue;
+      const cfg = PRESET_PLAN[presetName];
+      if (!cfg) continue;
+      const mustInclude: string[] = [];
+      if (foodBoxItem && presetName === 'storage') mustInclude.push(foodBoxItem.id);
+      roomPlans.push({ roomIndex: ri, weights: cfg.weights, minStats: cfg.minStats, mustInclude });
+    }
+    pendingTestPlansRef.current = roomPlans;
+
+    setTestModeNonce((v) => v + 1);
+    setTestModalOpen(false);
+    handleImportOwnership(ownership, newHouseInfo, null);
+  }, [handleImportOwnership]);
 
   const handleSavefileHandleCaptured = useCallback((handle: FileSystemFileHandle) => {
     setSavefileName(handle.name);
@@ -880,6 +991,7 @@ function App() {
         <AppHeader
           onHome={() => { setView('house'); setActiveRoom(HOUSE_VIEW); }}
           onLoadSavegame={handleLoadSavegame}
+          onTestMode={() => setTestModalOpen(true)}
           hasOwnership={hasOwnership}
           savefileName={savefileName}
           reloading={reloading}
@@ -925,6 +1037,7 @@ function App() {
       <SplitScreenContainer>
         {!isMobile && (
           <RoomDesignerWorkspace
+            key={testModeNonce}
             visible
             placed={placed}
             rooms={rooms}
@@ -1015,6 +1128,11 @@ function App() {
         onImport={handleImportOwnership}
         furnitureIdMap={furnitureIdMap}
         onHandleCaptured={handleSavefileHandleCaptured}
+      />
+      <TestModal
+        open={testModalOpen}
+        onClose={() => setTestModalOpen(false)}
+        onTest={handleTestMode}
       />
     </div>
   );
